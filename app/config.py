@@ -4,7 +4,7 @@ from pathlib import Path
 
 APP_NAME = "AI绘图资料整理"      # 中文品牌名（界面按语言显示 tr(APP_NAME)）
 APP_NAME_EN = "AIPromptsVault"
-VERSION = "2.3.1"
+VERSION = "2.3.2"
 
 # 资料库文件夹名：固定英文，不随界面语言变化（避免切换语言找不到数据）。
 # 旧版中文名「资料库」会在首次启动时自动迁移（见 library_dir）。

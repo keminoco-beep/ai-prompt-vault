@@ -1,6 +1,6 @@
 from app.i18n import t as tr, tr_format
 """图库右侧详情侧栏：显示当前选中图片的完整详情，可读、可复制、可跳转。"""
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QUrl, QTimer
 from PySide6.QtGui import QPixmap, QDesktopServices
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
                                QPushButton, QSizePolicy, QTextEdit, QScrollArea,
@@ -132,6 +132,13 @@ class DetailSidebar(QWidget):
         btns.addWidget(b_neg)
         self.lay.addLayout(btns)
 
+        # 复制反馈（成功/失败提示，2 秒后自动隐藏）
+        self.copy_status = QLabel("")
+        self.copy_status.setObjectName("hint")
+        self.copy_status.setAlignment(Qt.AlignCenter)
+        self.copy_status.setVisible(False)
+        self.lay.addWidget(self.copy_status)
+
         # 来源链接
         self.src_label = QLabel("")
         self.src_label.setObjectName("hint")
@@ -191,7 +198,7 @@ class DetailSidebar(QWidget):
         self.title_label.setText(rec.get("title") or tr("(无标题)"))
 
         # 大类 / 原始大类 chip
-        bm = rec.get("base_model") or tr("其他")
+        bm = rec.get("base_model") or "其他"
         self._add_chip(bm, accent=True)
         bm_raw = rec.get("base_model_raw") or ""
         if bm_raw and bm_raw != bm:
@@ -205,7 +212,7 @@ class DetailSidebar(QWidget):
         # 模型清单
         models = rec.get("models") or []
         if not models and rec.get("model_name"):
-            models = [{"name": rec["model_name"], "type": rec.get("model_type") or tr("大模型")}]
+            models = [{"name": rec["model_name"], "type": tr(rec.get("model_type") or "大模型")}]
         if not models:
             self.models_section.setVisible(False)
         else:
@@ -273,13 +280,14 @@ class DetailSidebar(QWidget):
     def _copy_record(self, which):
         rec = self._record
         if not rec:
+            self._flash(tr("请先选中一张图片"))
             return
         pos = rec.get("positive") or ""
         if which == "positive":
-            _copy(pos)
+            self._flash(tr("已复制 ✓") if _copy(pos) else tr("没有内容可复制"))
             return
         if which == "negative":
-            _copy(rec.get("negative") or "")
+            self._flash(tr("已复制 ✓") if _copy(rec.get("negative") or "") else tr("没有内容可复制"))
             return
         parts = [pos]
         neg = rec.get("negative") or ""
@@ -295,11 +303,18 @@ class DetailSidebar(QWidget):
         if rec.get("seed"):
             meta.append(f"Seed: {rec['seed']}")
         ms = rec.get("models") or []
-        main = next((mm for mm in ms if mm.get("type") == tr("大模型")), None)
+        main = next((mm for mm in ms if mm.get("type") == "大模型"), None)
         if main:
             meta.append(f"Model: {main['name']}")
         if rec.get("base_model") and rec["base_model"] != tr("其他"):
             meta.append(f"Base model: {rec.get('base_model_raw') or rec['base_model']}")
         if meta:
             parts.append(" ".join(meta))
-        _copy("\n".join(parts).strip())
+        text = "\n".join(parts).strip()
+        self._flash(tr("已复制 ✓") if _copy(text) else tr("没有内容可复制"))
+
+    def _flash(self, msg: str):
+        """在状态条显示反馈，2 秒后自动隐藏。"""
+        self.copy_status.setText(msg)
+        self.copy_status.setVisible(True)
+        QTimer.singleShot(2000, lambda: self.copy_status.setVisible(False))

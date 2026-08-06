@@ -96,7 +96,7 @@ class DetailDialog(QDialog):
         col_m.addWidget(field_label(tr("主模型大类")))
         self.base_combo = QComboBox()
         self.base_combo.addItems(list(BASE_MODEL_GROUPS))
-        bm = self.record.get("base_model") or tr("其他")
+        bm = self.record.get("base_model") or "其他"
         self.base_combo.setCurrentText(bm if bm in BASE_MODEL_GROUPS else tr("其他"))
         col_m.addWidget(self.base_combo)
         col_t = QVBoxLayout()
@@ -164,9 +164,9 @@ class DetailDialog(QDialog):
         form.addLayout(self.models_box)
         models = self.record.get("models") or []
         if not models and self.record.get("model_name"):
-            models = [{"name": self.record.get("model_name"), "type": self.record.get("model_type") or tr("大模型"), "url": ""}]
+            models = [{"name": self.record.get("model_name"), "type": tr(self.record.get("model_type") or "大模型"), "url": ""}]
         for m in models:
-            self._add_model_row(m.get("name") or "", m.get("type") or tr("大模型"), m.get("url") or "")
+            self._add_model_row(m.get("name") or "", tr(m.get("type") or "大模型"), m.get("url") or "")
 
         src = self.record.get("source_url") or ""
         if src:

@@ -1,6 +1,3 @@
-# 我本人是半句代码都不会写的，这个软件从头到脚100%为AI生成，甚至包括下面的说明书。甚至发布到这里都是让AI代工的
-# 我啥都不会，目前的版本应该没什么恶性bug了，但是如果有想要的需求可以提。（然后我去问AI能不能做）
-# XDD
 # AI Prompt Vault (AI绘图资料整理)
 
 > A fully offline, single-exe desktop tool for collecting and organizing AI-generated images:
@@ -119,3 +116,8 @@ Library/
 ## License
 
 [MIT](LICENSE)
+
+## Changelog
+
+### v2.3.2 (2026-08-07)
+- Bug fixes: Civitai import NameError; auto-extracted prompts lost on save; copy feedback.

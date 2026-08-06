@@ -310,7 +310,7 @@ class GalleryPanel(QWidget):
             if k == "title":
                 return (r.get("title") or "").lower()
             if k == "base_model":
-                return (r.get("base_model") or tr("其他"))
+                return (r.get("base_model") or "其他")
             if k == "models":
                 ms = r.get("models") or []
                 return (ms[0].get("name") or "") if ms else (r.get("model_name") or "")
@@ -326,15 +326,15 @@ class GalleryPanel(QWidget):
     def reload(self):
         self._records = list(self.store.records)
         self._pm_cache.clear()
-        types_present = {(r.get("base_model") or tr("其他")) for r in self._records}
+        types_present = {(r.get("base_model") or "其他") for r in self._records}
         cur_base = self.base_combo.currentText()
         self.base_combo.blockSignals(True)
         self.base_combo.clear()
         self.base_combo.addItem(tr("全部"))
         for g in BASE_MODEL_GROUPS:
-            if g != tr("其他") and g in types_present:
+            if g != "其他" and g in types_present:
                 self.base_combo.addItem(g)
-        if tr("其他") in types_present:
+        if "其他" in types_present:
             self.base_combo.addItem(tr("其他"))
         if cur_base in [self.base_combo.itemText(i) for i in range(self.base_combo.count())]:
             self.base_combo.setCurrentText(cur_base)
@@ -421,13 +421,13 @@ class GalleryPanel(QWidget):
             ti.setData(Qt.UserRole, uid)
             self.detail.setItem(row, 1, ti)
             # 主模型大类
-            bi = QTableWidgetItem(r.get("base_model") or tr("其他"))
+            bi = QTableWidgetItem(tr(r.get("base_model") or "其他"))
             bi.setData(Qt.UserRole, uid)
             self.detail.setItem(row, 2, bi)
             # 模型清单
             ms = r.get("models") or []
             if not ms and r.get("model_name"):
-                ms = [{"name": r["model_name"], "type": r.get("model_type") or tr("大模型")}]
+                ms = [{"name": r["model_name"], "type": tr(r.get("model_type") or "大模型")}]
             mi = QTableWidgetItem(self._models_brief(ms, r.get("loras") or []))
             mi.setData(Qt.UserRole, uid)
             self.detail.setItem(row, 3, mi)
@@ -462,7 +462,7 @@ class GalleryPanel(QWidget):
         if len(lora_names) > 2:
             parts.append(f"+{len(lora_names)-2} LoRA")
         others = [m.get("name") for m in models
-                  if m.get("type") not in (tr("大模型"), "LoRA") and m.get("name")]
+                  if m.get("type") not in ("大模型", "LoRA") and m.get("name")]
         if others:
             parts.append("、".join(others[:2]))
         return " · ".join(parts) if parts else "—"

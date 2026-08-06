@@ -482,7 +482,7 @@ class CollectPanel(QWidget):
         r = item["record"]
         self.title_edit.setText(r.get("title") or "")
         self.tags_edit.setText(", ".join(r.get("tags") or []))
-        bm = r.get("base_model") or tr("其他")
+        bm = r.get("base_model") or "其他"
         self.base_combo.setCurrentText(bm if bm in BASE_MODEL_GROUPS else tr("其他"))
         self.pos_edit.setPlainText(r.get("positive") or "")
         self.neg_edit.setPlainText(r.get("negative") or "")
@@ -493,11 +493,11 @@ class CollectPanel(QWidget):
         models = r.get("models") or []
         if not models and (r.get("model_name") or r.get("loras")):
             if r.get("model_name"):
-                models.append({"name": r["model_name"], "type": r.get("model_type") or tr("大模型"), "url": ""})
+                models.append({"name": r["model_name"], "type": r.get("model_type") or "大模型", "url": ""})
             for lo in (r.get("loras") or []):
                 models.append({"name": lo, "type": "LoRA", "url": ""})
         for m in models:
-            self._add_model_row(m.get("name") or "", m.get("type") or tr("大模型"), m.get("url") or "")
+            self._add_model_row(m.get("name") or "", tr(m.get("type") or "大模型"), m.get("url") or "")
         loras = [m["name"] for m in (models or []) if m.get("type") == "LoRA" and m.get("name")]
         if loras:
             self.lora_label.setText("LoRA：" + "、".join(loras))
@@ -507,12 +507,16 @@ class CollectPanel(QWidget):
     def _read_form(self) -> dict:
         tags = [t.strip() for t in self.tags_edit.text().replace("，", ",").split(",") if t.strip()]
         models = self._read_models()
+        # 主模型大类：显示值反查回中文 key；"全部/All" 视为未选择（不覆盖已提取值）
+        bm = rev(self.base_combo.currentText())
+        if bm in ("全部",):
+            bm = ""
         return {
             "title": self.title_edit.text().strip(),
             "tags": tags,
             "positive": self.pos_edit.toPlainText().strip(),
             "negative": self.neg_edit.toPlainText().strip(),
-            "base_model": self.base_combo.currentText(),
+            "base_model": bm,
             "models": models,
             "sampler": self.param_edits["sampler"].text().strip(),
             "steps": self.param_edits["steps"].text().strip(),
@@ -628,7 +632,8 @@ class CollectPanel(QWidget):
     def _fill_from_image_meta(self, uid: str) -> bool:
         """从待保存项的图片文件提取内嵌生成参数（A1111/NovelAI/ComfyUI）。
 
-        仅合并到 record，不更新 visual（由调用方统一更新，避免遗漏导致"导入中"卡住）。
+        合并到 record，并同步到表单控件（当前选中项），保证保存时不会因空表单
+        覆盖提取到的数据（与 Civitai 导入路径行为一致）。
         返回 True 表示提取到数据。
         """
         item = self.pending.get(uid)
@@ -644,8 +649,12 @@ class CollectPanel(QWidget):
         fields = {k: v for k, v in meta.items() if v}
         mn = fields.pop("model_name", "")
         if mn and not item["record"].get("models"):
-            fields["models"] = [{"name": mn, "type": tr("大模型"), "url": "", "base_model": ""}]
+            # 模型类型用固定中文 key 存储（不随语言翻译，否则后续比较全部失效）
+            fields["models"] = [{"name": mn, "type": "大模型", "url": "", "base_model": ""}]
         item["record"].update(fields)
+        # 同步表单（仅当前选中项），保存时表单与 record 一致
+        if self._li_of(uid) == self.pending_list.currentItem():
+            self._apply_form(item)
         return True
 
     def _on_task_done(self, uid, res, is_import=False):
@@ -702,8 +711,10 @@ class CollectPanel(QWidget):
 
     # ---------- 保存 ----------
     def _build_record(self, item: dict) -> dict:
-        # 把表单最新内容合并进待保存项（保留 source/尺寸等非表单字段）
-        item["record"].update(self._read_form())
+        # 把表单最新内容合并进待保存项；**空值不覆盖**已提取的数据
+        # （图片自动提取的提示词/模型等保留，用户手动填写的值优先）
+        form = self._read_form()
+        item["record"].update({k: v for k, v in form.items() if v})
         r = item["record"]
         models = r.get("models") or []
         loras = merge_loras(
@@ -714,7 +725,7 @@ class CollectPanel(QWidget):
             "tags": r.get("tags") or [],
             "positive": r.get("positive") or "",
             "negative": r.get("negative") or "",
-            "base_model": r.get("base_model") or tr("其他"),
+            "base_model": r.get("base_model") or "其他",
             "base_model_raw": r.get("base_model_raw") or "",
             "models": models,
             "loras": loras,
@@ -735,7 +746,7 @@ class CollectPanel(QWidget):
             if make_thumbnail(src, str(self.store.thumbs_dir / tname), 400):
                 rec["thumb_file"] = tname
         if not rec["title"]:
-            rec["title"] = rec["image_file"] or tr("未命名")
+            rec["title"] = rec["image_file"] or "未命名"
         return rec
 
     def save_current(self):
