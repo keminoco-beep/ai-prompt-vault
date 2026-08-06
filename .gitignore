@@ -1,0 +1,33 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+
+# ---- Build artifacts ----
+build/
+dist/
+*.spec
+
+# ---- App data (user data, never commit) ----
+Library/
+资料库/
+backup/
+release/
+diag.log
+import.log
+
+# ---- Tests ----
+tests/shots/
+tests/.shots_old_*
+.*_old_*/
+
+# ---- IDE / OS ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- WorkBuddy ----
+.workbuddy/

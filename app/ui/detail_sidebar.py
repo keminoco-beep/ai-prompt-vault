@@ -1,0 +1,305 @@
+from app.i18n import t as tr, tr_format
+"""图库右侧详情侧栏：显示当前选中图片的完整详情，可读、可复制、可跳转。"""
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QPixmap, QDesktopServices
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
+                               QPushButton, QSizePolicy, QTextEdit, QScrollArea,
+                               QApplication)
+
+from app.filters import ratio_text
+from app.thumbs import load_pixmap
+
+
+def _copy(text: str) -> bool:
+    if not text:
+        return False
+    QApplication.clipboard().setText(text)
+    return True
+
+
+class DetailSidebar(QWidget):
+    """图库右侧详情面板。"""
+
+    def __init__(self, store, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self._record = None
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(440)
+        self._build()
+
+    def _build(self):
+        # 深色背景（仅作用于本组件容器，避免 QWidget 通配覆盖按钮/输入框的全局样式，
+        # 否则按钮会失去 hover/pressed 反馈）
+        self.setObjectName("detailSidebar")
+        self.setStyleSheet(
+            "QWidget#detailSidebar { background-color: #16161f; color: #ececf6; }"
+            " QWidget#detailSidebar QScrollArea { background: #16161f; border: none; }"
+            " QWidget#detailSidebar QScrollArea > QWidget > QWidget { background: #16161f; }"
+        )
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("detailScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: #16161f; border: none; }")
+        outer.addWidget(scroll)
+
+        inner = QWidget()
+        self.lay = QVBoxLayout(inner)
+        self.lay.setContentsMargins(14, 14, 14, 14)
+        self.lay.setSpacing(10)
+        scroll.setWidget(inner)
+
+        self.img_label = QLabel()
+        self.img_label.setAlignment(Qt.AlignCenter)
+        self.img_label.setFixedHeight(220)
+        self.img_label.setStyleSheet(
+            "background:#0e0e16; border:1px solid #33334c; border-radius:12px; color:#6d6d8a;")
+        self.img_label.setText(tr("选择图片查看详情"))
+        self.lay.addWidget(self.img_label)
+
+        self.title_label = QLabel(tr("(未选中)"))
+        self.title_label.setObjectName("popupTitle")
+        self.title_label.setWordWrap(True)
+        self.lay.addWidget(self.title_label)
+
+        self.chip_row = QHBoxLayout()
+        self.chip_row.setSpacing(6)
+        self.lay.addLayout(self.chip_row)
+
+        # 模型清单
+        self.models_section = QLabel(tr("模型清单"))
+        self.models_section.setObjectName("popupSection")
+        self.lay.addWidget(self.models_section)
+        self.models_box = QVBoxLayout()
+        self.models_box.setSpacing(4)
+        self.lay.addLayout(self.models_box)
+
+        # 提示词
+        self.pos_label = QLabel(tr("正向提示词"))
+        self.pos_label.setObjectName("popupSection")
+        self.lay.addWidget(self.pos_label)
+        self.pos_text = QTextEdit()
+        self.pos_text.setReadOnly(True)
+        self.pos_text.setMinimumHeight(96)
+        self.pos_text.setMaximumHeight(160)
+        self.lay.addWidget(self.pos_text)
+
+        self.neg_label = QLabel(tr("负向提示词"))
+        self.neg_label.setObjectName("popupSection")
+        self.lay.addWidget(self.neg_label)
+        self.neg_text = QTextEdit()
+        self.neg_text.setReadOnly(True)
+        self.neg_text.setMinimumHeight(56)
+        self.neg_text.setMaximumHeight(110)
+        self.lay.addWidget(self.neg_text)
+
+        # 参数
+        self.params_label = QLabel(tr("采样参数"))
+        self.params_label.setObjectName("popupSection")
+        self.lay.addWidget(self.params_label)
+        self.params_layout = QVBoxLayout()
+        self.params_layout.setSpacing(3)
+        self.lay.addLayout(self.params_layout)
+        self._param_labels = {}
+
+        # 分组
+        self.group_label = QLabel(tr("分组"))
+        self.group_label.setObjectName("popupSection")
+        self.lay.addWidget(self.group_label)
+        self.group_chip = QLabel(tr("未分组"))
+        self.group_chip.setObjectName("chip")
+        self.lay.addWidget(self.group_chip)
+
+        # 复制按钮组
+        btns = QHBoxLayout()
+        btns.setSpacing(6)
+        b_all = QPushButton(tr("复制全部"))
+        b_all.setObjectName("primary")
+        b_all.clicked.connect(lambda: self._copy_record("all"))
+        btns.addWidget(b_all)
+        b_pos = QPushButton(tr("复制正向"))
+        b_pos.setObjectName("ghost")
+        b_pos.clicked.connect(lambda: self._copy_record("positive"))
+        btns.addWidget(b_pos)
+        b_neg = QPushButton(tr("复制负向"))
+        b_neg.setObjectName("ghost")
+        b_neg.clicked.connect(lambda: self._copy_record("negative"))
+        btns.addWidget(b_neg)
+        self.lay.addLayout(btns)
+
+        # 来源链接
+        self.src_label = QLabel("")
+        self.src_label.setObjectName("hint")
+        self.src_label.setWordWrap(True)
+        self.src_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.src_label.setVisible(False)
+        self.lay.addWidget(self.src_label)
+        self.src_btn = QPushButton(tr("在浏览器打开来源链接"))
+        self.src_btn.setObjectName("ghost")
+        self.src_btn.setVisible(False)
+        self.src_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self._record.get("source_url", ""))) if self._record else None)
+        self.lay.addWidget(self.src_btn)
+
+        self.lay.addStretch(1)
+
+    # ---------- 公共 ----------
+    def set_record(self, rec):
+        """显示记录详情。无 rec 时清空并显示占位。"""
+        # 清旧
+        while self.chip_row.count():
+            item = self.chip_row.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        while self.models_box.count():
+            item = self.models_box.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        for k, lab in list(self._param_labels.items()):
+            lab.deleteLater()
+        self._param_labels.clear()
+
+        if not rec:
+            self._record = None
+            self.img_label.setText(tr("选择图片查看详情"))
+            self.img_label.setPixmap(QPixmap())
+            self.title_label.setText(tr("(未选中)"))
+            return
+
+        self._record = rec
+
+        # 缩略图（缩略优先，无则原图）
+        pm = None
+        if rec.get("thumb_file"):
+            pm = load_pixmap(str(self.store.thumbs_dir / rec["thumb_file"]), 360)
+        if (pm is None or pm.isNull()) and rec.get("image_file"):
+            pm = load_pixmap(str(self.store.images_dir / rec["image_file"]), 360)
+        if pm and not pm.isNull():
+            scaled = pm.scaled(360, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.img_label.setPixmap(scaled)
+            self.img_label.setText("")
+        else:
+            self.img_label.setPixmap(QPixmap())
+            self.img_label.setText(tr("(无图片)"))
+
+        self.title_label.setText(rec.get("title") or tr("(无标题)"))
+
+        # 大类 / 原始大类 chip
+        bm = rec.get("base_model") or tr("其他")
+        self._add_chip(bm, accent=True)
+        bm_raw = rec.get("base_model_raw") or ""
+        if bm_raw and bm_raw != bm:
+            self._add_chip(bm_raw[:24])
+        w, h = rec.get("width") or 0, rec.get("height") or 0
+        self._add_chip(f"{tr(ratio_text(w, h))} {w}×{h}" if w else tr("未知尺寸"))
+        grp = rec.get("group") or ""
+        if grp:
+            self._add_chip(f"📁 {grp}")
+
+        # 模型清单
+        models = rec.get("models") or []
+        if not models and rec.get("model_name"):
+            models = [{"name": rec["model_name"], "type": rec.get("model_type") or tr("大模型")}]
+        if not models:
+            self.models_section.setVisible(False)
+        else:
+            self.models_section.setVisible(True)
+            for m in models:
+                self._add_model_row(m)
+
+        # 提示词
+        self.pos_text.setPlainText(rec.get("positive") or "")
+        self.neg_text.setPlainText(rec.get("negative") or "")
+
+        # 参数
+        for key, label in (("sampler", tr("采样器")), ("steps", tr("步数")), ("cfg", tr("CFG")), ("seed", tr("种子"))):
+            v = str(rec.get(key) or "").strip()
+            if v:
+                row = QLabel(f"{label}: {v}")
+                row.setObjectName("popupText")
+                self.params_layout.addWidget(row)
+                self._param_labels[key] = row
+
+        # 分组
+        self.group_chip.setText(grp or tr("未分组"))
+
+        # 来源
+        src = rec.get("source_url") or ""
+        if src:
+            self.src_label.setText(tr_format("来源：{src}", src=src))
+            self.src_label.setVisible(True)
+            self.src_btn.setVisible(True)
+            self.src_btn.clicked.disconnect() if self.src_btn.receivers(self.src_btn.clicked) else None
+            self.src_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(src)))
+        else:
+            self.src_label.setVisible(False)
+            self.src_btn.setVisible(False)
+
+    # ---------- 内部 ----------
+    def _add_chip(self, text, accent=False):
+        lb = QLabel(text)
+        lb.setObjectName("chipAccent" if accent else "chip")
+        self.chip_row.addWidget(lb)
+
+    def _add_model_row(self, m):
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(6)
+        name = QLabel(m.get("name") or "")
+        name.setObjectName("popupText")
+        name.setWordWrap(True)
+        h.addWidget(name, 1)
+        type_lb = QLabel(m.get("type") or "")
+        type_lb.setObjectName("chip")
+        h.addWidget(type_lb)
+        url = m.get("url") or ""
+        if url and ("civitai.com" in url or url.startswith("http")):
+            open_btn = QPushButton(tr("打开"))
+            open_btn.setObjectName("ghost")
+            open_btn.setFixedWidth(48)
+            open_btn.setCursor(Qt.PointingHandCursor)
+            u = url
+            open_btn.clicked.connect(lambda checked=False, uu=u: QDesktopServices.openUrl(QUrl(uu)))
+            h.addWidget(open_btn)
+        self.models_box.addWidget(row)
+
+    def _copy_record(self, which):
+        rec = self._record
+        if not rec:
+            return
+        pos = rec.get("positive") or ""
+        if which == "positive":
+            _copy(pos)
+            return
+        if which == "negative":
+            _copy(rec.get("negative") or "")
+            return
+        parts = [pos]
+        neg = rec.get("negative") or ""
+        if neg:
+            parts.append(f"Negative prompt: {neg}")
+        meta = []
+        if rec.get("steps"):
+            meta.append(f"Steps: {rec['steps']}")
+        if rec.get("sampler"):
+            meta.append(f"Sampler: {rec['sampler']}")
+        if rec.get("cfg"):
+            meta.append(f"CFG scale: {rec['cfg']}")
+        if rec.get("seed"):
+            meta.append(f"Seed: {rec['seed']}")
+        ms = rec.get("models") or []
+        main = next((mm for mm in ms if mm.get("type") == tr("大模型")), None)
+        if main:
+            meta.append(f"Model: {main['name']}")
+        if rec.get("base_model") and rec["base_model"] != tr("其他"):
+            meta.append(f"Base model: {rec.get('base_model_raw') or rec['base_model']}")
+        if meta:
+            parts.append(" ".join(meta))
+        _copy("\n".join(parts).strip())

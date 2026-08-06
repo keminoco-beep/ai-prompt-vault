@@ -1,0 +1,53 @@
+name: Build Windows exe
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Run unit tests
+        run: |
+          python tests/test_core.py
+          python tests/test_image_meta.py
+
+      - name: Build exe
+        run: python build.py
+
+      - name: Smoke test exe
+        run: dist\AI绘图资料整理.exe --selftest
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI绘图资料整理-windows-x64
+          path: dist/AI绘图资料整理.exe
+
+  # Optional: attach the exe to a GitHub Release when a tag like v1.2.3 is pushed
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AI绘图资料整理-windows-x64
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/AI绘图资料整理.exe
