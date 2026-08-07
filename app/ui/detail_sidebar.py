@@ -10,6 +10,13 @@ from app.filters import ratio_text
 from app.thumbs import load_pixmap
 
 
+def elide_middle(text: str, width: int, fm) -> str:
+    """长文本中间截断显示（如 M8FZGN3...N0?sig=...），保留开头结尾。"""
+    if not text or fm.horizontalAdvance(text) <= width:
+        return text
+    return fm.elidedText(text, Qt.ElideMiddle, max(width, 40))
+
+
 def _copy(text: str) -> bool:
     if not text:
         return False
@@ -50,25 +57,29 @@ class DetailSidebar(QWidget):
 
         inner = QWidget()
         self.lay = QVBoxLayout(inner)
-        self.lay.setContentsMargins(14, 14, 14, 14)
-        self.lay.setSpacing(10)
+        self.lay.setContentsMargins(10, 10, 10, 10)
+        self.lay.setSpacing(6)
         scroll.setWidget(inner)
 
+        # 缩略图：缩小高度，让更多内容在低分辨率屏内可见
         self.img_label = QLabel()
         self.img_label.setAlignment(Qt.AlignCenter)
-        self.img_label.setFixedHeight(220)
+        self.img_label.setFixedHeight(160)
         self.img_label.setStyleSheet(
-            "background:#0e0e16; border:1px solid #33334c; border-radius:12px; color:#6d6d8a;")
+            "background:#0e0e16; border:1px solid #33334c; border-radius:10px; color:#6d6d8a;")
         self.img_label.setText(tr("选择图片查看详情"))
         self.lay.addWidget(self.img_label)
 
         self.title_label = QLabel(tr("(未选中)"))
         self.title_label.setObjectName("popupTitle")
         self.title_label.setWordWrap(True)
+        self.title_label.setMinimumWidth(0)
+        from PySide6.QtWidgets import QSizePolicy
+        self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.lay.addWidget(self.title_label)
 
         self.chip_row = QHBoxLayout()
-        self.chip_row.setSpacing(6)
+        self.chip_row.setSpacing(4)
         self.lay.addLayout(self.chip_row)
 
         # 模型清单
@@ -79,14 +90,14 @@ class DetailSidebar(QWidget):
         self.models_box.setSpacing(4)
         self.lay.addLayout(self.models_box)
 
-        # 提示词
+        # 提示词：限高更紧凑（默认折叠为点击展开）
         self.pos_label = QLabel(tr("正向提示词"))
         self.pos_label.setObjectName("popupSection")
         self.lay.addWidget(self.pos_label)
         self.pos_text = QTextEdit()
         self.pos_text.setReadOnly(True)
-        self.pos_text.setMinimumHeight(96)
-        self.pos_text.setMaximumHeight(160)
+        self.pos_text.setMinimumHeight(60)
+        self.pos_text.setMaximumHeight(120)
         self.lay.addWidget(self.pos_text)
 
         self.neg_label = QLabel(tr("负向提示词"))
@@ -94,8 +105,8 @@ class DetailSidebar(QWidget):
         self.lay.addWidget(self.neg_label)
         self.neg_text = QTextEdit()
         self.neg_text.setReadOnly(True)
-        self.neg_text.setMinimumHeight(56)
-        self.neg_text.setMaximumHeight(110)
+        self.neg_text.setMinimumHeight(40)
+        self.neg_text.setMaximumHeight(80)
         self.lay.addWidget(self.neg_text)
 
         # 参数
@@ -195,7 +206,11 @@ class DetailSidebar(QWidget):
             self.img_label.setPixmap(QPixmap())
             self.img_label.setText(tr("(无图片)"))
 
-        self.title_label.setText(rec.get("title") or tr("(无标题)"))
+        title = rec.get("title") or tr("(无标题)")
+        # 超长文件名中间截断显示，悬停显示完整
+        self.title_label.setText(elide_middle(title, self.title_label.width() or 300,
+                                              self.title_label.fontMetrics()))
+        self.title_label.setToolTip(title)
 
         # 大类 / 原始大类 chip
         bm = rec.get("base_model") or "其他"
@@ -242,7 +257,10 @@ class DetailSidebar(QWidget):
             self.src_label.setText(tr_format("来源：{src}", src=src))
             self.src_label.setVisible(True)
             self.src_btn.setVisible(True)
-            self.src_btn.clicked.disconnect() if self.src_btn.receivers(self.src_btn.clicked) else None
+            try:
+                self.src_btn.clicked.disconnect()
+            except RuntimeError:
+                pass
             self.src_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(src)))
         else:
             self.src_label.setVisible(False)
@@ -259,15 +277,30 @@ class DetailSidebar(QWidget):
         h = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(6)
-        name = QLabel(m.get("name") or "")
+        name_text = m.get("name") or ""
+        name = QLabel(name_text)
         name.setObjectName("popupText")
         name.setWordWrap(True)
+        # 超长文件名不允许撑破布局：水平方向尺寸交给布局分配 + 中间截断显示
+        name.setMinimumWidth(0)
+        name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        name.setText(elide_middle(name_text, 260, name.fontMetrics()))
+        name.setToolTip(name_text)
         h.addWidget(name, 1)
         type_lb = QLabel(m.get("type") or "")
         type_lb.setObjectName("chip")
+        type_lb.setMinimumWidth(0)
+        type_lb.setMaximumWidth(110)
         h.addWidget(type_lb)
         url = m.get("url") or ""
         if url and ("civitai.com" in url or url.startswith("http")):
+            dl_btn = QPushButton(tr("下载"))
+            dl_btn.setObjectName("ghost")
+            dl_btn.setFixedWidth(52)
+            dl_btn.setCursor(Qt.PointingHandCursor)
+            dl_btn.setToolTip(tr("下载到 ComfyUI 对应模型文件夹"))
+            dl_btn.clicked.connect(lambda checked=False, mm=m: self._download_model(mm))
+            h.addWidget(dl_btn)
             open_btn = QPushButton(tr("打开"))
             open_btn.setObjectName("ghost")
             open_btn.setFixedWidth(48)
@@ -276,6 +309,15 @@ class DetailSidebar(QWidget):
             open_btn.clicked.connect(lambda checked=False, uu=u: QDesktopServices.openUrl(QUrl(uu)))
             h.addWidget(open_btn)
         self.models_box.addWidget(row)
+
+    def _download_model(self, m):
+        from PySide6.QtGui import QCursor
+        from app.ui.download_manager import DownloadManager
+        win = self.window()
+        mgr: DownloadManager = getattr(win, "download_manager", None)
+        if mgr is None:
+            return
+        mgr.start(m, parent_widget=self, src_pos=QCursor.pos())
 
     def _copy_record(self, which):
         rec = self._record

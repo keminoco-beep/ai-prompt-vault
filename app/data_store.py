@@ -163,6 +163,17 @@ class DataStore:
             pass
         return default
 
+    def save_setting(self, key: str, value):
+        try:
+            data = {}
+            if self.settings_path().exists():
+                data = json.loads(self.settings_path().read_text(encoding="utf-8"))
+            data[key] = value
+            self.settings_path().write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
     # ---------- 记录 CRUD ----------
     @property
     def records(self) -> list:

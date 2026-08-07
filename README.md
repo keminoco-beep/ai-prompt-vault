@@ -118,6 +118,22 @@ Library/
 [MIT](LICENSE)
 
 ## Changelog
+### v2.4.7 (2026-08-08)
+- Download list: incremental refresh (no longer rebuilds rows on every update,
+  so pause/delete buttons stay clickable)
+- Delete works on paused downloads (cleans up .part file)
+- Button label: Cancel → Delete
+- ComfyUI model download: pause/resume with HTTP Range resume, HTML error-page
+  detection, Civitai API Key auth (optional), speed display, throttled refresh
+
+### v2.4.6 (2026-08-08)
+- Pause/resume downloads with breakpoint continuation (HTTP Range)
+- Long file names elided in detail sidebar (middle-truncated with tooltip)
+- API-key guide dialog shown at most once per session
+
+### v2.4.5 (2026-08-08)
+- Negative Content-Length guard; lower-resolution friendly sidebar
+- API Key guide at civitai.red/user/account; cancel buttons; throttled UI refresh
 
 ### v2.3.2 (2026-08-07)
 - Bug fixes: Civitai import NameError; auto-extracted prompts lost on save; copy feedback.

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, Q
 from app.config import APP_NAME, VERSION
 from app.ui.collect_panel import CollectPanel
 from app.ui.gallery_panel import GalleryPanel
+from app.ui.model_panel import ModelPanel
 from app.filters import group_counts
 
 
@@ -72,8 +73,10 @@ class MainWindow(QMainWindow):
         self.nav_group.setExclusive(True)
         self.collect_btn = self._nav_btn("◈  " + tr("收藏作品"), 0)
         self.gallery_btn = self._nav_btn("▦  " + tr("图库浏览"), 1)
+        self.model_btn = self._nav_btn("◫  " + tr("模型管理"), 2)
         sv.addWidget(self.collect_btn)
         sv.addWidget(self.gallery_btn)
+        sv.addWidget(self.model_btn)
         sv.addStretch(1)
 
         # -------- 分组区（折叠） --------
@@ -113,6 +116,11 @@ class MainWindow(QMainWindow):
         open_btn.setObjectName("sideSmall")
         open_btn.clicked.connect(lambda: self.store.open_folder(str(self.store.root)))
         sv.addWidget(open_btn)
+        # 下载列表按钮（带徽标，显示活动任务数）
+        self.download_btn_sidebar = QPushButton("📥  " + tr("下载列表"))
+        self.download_btn_sidebar.setObjectName("sideSmall")
+        self.download_btn_sidebar.clicked.connect(self._show_download_page)
+        sv.addWidget(self.download_btn_sidebar)
         settings_btn = QPushButton("⚙  " + tr("设置"))
         settings_btn.setObjectName("sideSmall")
         settings_btn.clicked.connect(self._open_settings)
@@ -128,20 +136,113 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.collect_panel = CollectPanel(self.store)
         self.gallery_panel = GalleryPanel(self.store)
+        self.model_panel = ModelPanel(self.store)
+
+        # 全局下载管理器（必须在 DownloadListPanel 之前创建）
+        from app.ui.download_manager import DownloadManager
+        self.download_manager = DownloadManager(self.store, self)
+        # 启动时清理 .part 残留
+        self.download_manager.cleanup_partials()
+        # 飞行动画请求
+        self.download_manager.flyRequested.connect(self._fly_to_download)
+
+        from app.ui.download_list_panel import DownloadListPanel
+        self.download_panel = DownloadListPanel(self.store, self.download_manager)
+
         self.stack.addWidget(self.collect_panel)
         self.stack.addWidget(self.gallery_panel)
+        self.stack.addWidget(self.model_panel)
+        self.stack.addWidget(self.download_panel)
         self.collect_panel.recordsSaved.connect(self.gallery_panel.reload)
         self.collect_panel.recordsSaved.connect(self.refresh_groups)
         self.gallery_panel.groupChanged.connect(self.refresh_groups)
+        self.stack.currentChanged.connect(self._on_page_changed)
         root.addWidget(self.stack, 1)
 
         self.collect_btn.setChecked(True)
         self.stack.setCurrentIndex(0)
         self.refresh_groups()
+        # 启动徽标刷新
+        self.download_manager.taskUpdated.connect(lambda *_: self._update_download_badge())
+        self.download_manager.taskFinished.connect(lambda *_: self._update_download_badge())
 
     def _open_settings(self):
         from app.ui.settings_dialog import SettingsDialog
         SettingsDialog(self.store, self).exec()
+
+    def _on_page_changed(self, idx):
+        """切到模型管理页时重新扫描 ComfyUI（模型可能被外部改动）。"""
+        if idx == 2:
+            self.model_panel.reload()
+
+    def _show_download_page(self):
+        # 下载页是独立面板（不占用 nav 高亮），直接切换
+        self.stack.setCurrentIndex(3)
+
+    def _update_download_badge(self):
+        n = self.download_manager.active_count()
+        suffix = f"  ({n})" if n else ""
+        self.download_btn_sidebar.setText(f"📥  {tr('下载列表')}{suffix}")
+
+    def _fly_to_download(self, src_x: int, src_y: int):
+        """小动画：从 (src_x, src_y) 飞到侧栏下载列表按钮位置，模拟 macOS 下载飞入。
+
+        动画对象必须保存引用（局部变量会被 GC 回收导致动画不执行）。
+        """
+        try:
+            from PySide6.QtCore import QPropertyAnimation, QPoint, QAbstractAnimation
+            from PySide6.QtWidgets import QLabel, QGraphicsOpacityEffect
+        except Exception:
+            return
+        end_btn = self.download_btn_sidebar
+        if not end_btn or not end_btn.isVisible():
+            return
+        from PySide6.QtCore import QPoint
+        start = self.mapFromGlobal(QPoint(src_x, src_y))
+        btn_center = end_btn.mapToGlobal(end_btn.rect().center())
+        end = self.mapFromGlobal(QPoint(btn_center.x(), btn_center.y()))
+        # 飞行小图标
+        lbl = QLabel("📥", self)
+        lbl.setFixedSize(38, 38)
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet(
+            "QLabel { background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            "stop:0 #6d5ef0, stop:1 #4f7de0); border-radius: 19px;"
+            " color: white; font-size: 20px; border: 2px solid #fff; }")
+        lbl.move(start.x() - 19, start.y() - 19)
+        lbl.show()
+        lbl.raise_()
+        op = QGraphicsOpacityEffect(lbl)
+        lbl.setGraphicsEffect(op)
+        # 位置动画（保存引用，防 GC）
+        anim_pos = QPropertyAnimation(lbl, b"pos")
+        anim_pos.setDuration(650)
+        anim_pos.setStartValue(lbl.pos())
+        anim_pos.setEndValue(QPoint(end.x() - 19, end.y() - 19))
+        anim_op = QPropertyAnimation(op, b"opacity")
+        anim_op.setDuration(650)
+        anim_op.setStartValue(1.0)
+        anim_op.setEndValue(0.0)
+        # 持有引用直到动画结束
+        if not hasattr(self, "_fly_anims"):
+            self._fly_anims = []
+        self._fly_anims.append(anim_pos)
+        self._fly_anims.append(anim_op)
+
+        def _cleanup():
+            try:
+                lbl.deleteLater()
+                if anim_pos in self._fly_anims:
+                    self._fly_anims.remove(anim_pos)
+                if anim_op in self._fly_anims:
+                    self._fly_anims.remove(anim_op)
+            except Exception:
+                pass
+
+        anim_pos.finished.connect(_cleanup)
+        anim_op.finished.connect(_cleanup)
+        anim_pos.start()
+        anim_op.start()
 
     # ---------- 分组 ----------
     def refresh_groups(self):

@@ -46,8 +46,9 @@ QPushButton#sideSmall {
 QPushButton#sideSmall:hover { background: #1e1e2c; color: #ffffff; border-color: #3a3a58; }
 QPushButton#sideSmall:pressed { background: #14141e; }
 
-/* ---------- 分组区 ---------- */
+/* ---------- 分组区 / 模型管理 ---------- */
 #groupTitle { color: #a8a8c0; font-size: 12px; font-weight: 600; }
+QTreeView { show-decoration-selected: false; outline: 0; }
 QTreeWidget#groupTree {
     background: transparent; border: none; color: #d8d8e8;
     font-size: 12px; outline: none;
@@ -56,10 +57,7 @@ QTreeWidget#groupTree::item {
     height: 26px; border-radius: 7px; padding: 0 4px;
 }
 QTreeWidget#groupTree::item:hover { background: #1c1c2a; }
-QTreeWidget#groupTree::item:selected { background: #262244; color: #ffffff; }
-QTreeWidget#groupTree::branch { image: none; border: none; background: transparent; }
-QTreeWidget#groupTree::branch:has-children, QTreeWidget#groupTree::branch:open,
-QTreeWidget#groupTree::branch:closed { image: none; }
+QTreeWidget#groupTree::item:selected { background: #262244; color: #ffffff; border: none; }
 
 /* ---------- 输入控件 ---------- */
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox {
@@ -191,6 +189,70 @@ QSlider::handle:horizontal:pressed { background: #5547d0; }
     border-radius: 8px; padding: 2px 8px; font-size: 11px;
 }
 #chipAccent { background-color: #2a2650; color: #b6aaff; border: 1px solid #5245ad; }
+
+/* ---------- 弹窗（QMessageBox / QInputDialog / QFileDialog 内部文字必须亮色） ---------- */
+QMessageBox, QInputDialog, QFileDialog {
+    background-color: #1c1c28;
+    color: #f2f2f8;
+}
+QMessageBox QLabel, QInputDialog QLabel, QFileDialog QLabel {
+    color: #f2f2f8;
+    background: transparent;
+}
+QMessageBox QLabel#qt_msgboxex_icon_label { background: transparent; }
+QInputDialog QLineEdit, QFileDialog QLineEdit {
+    background-color: #21212e; border: 1px solid #2c2c42; border-radius: 10px;
+    color: #f2f2f8; padding: 6px 10px;
+}
+QInputDialog QLineEdit:focus { border: 1px solid #6d5ef0; }
+QInputDialog QPushButton, QMessageBox QPushButton, QFileDialog QPushButton {
+    background-color: #26263a; color: #f2f2f8; border: 1px solid #33334c;
+    border-radius: 10px; padding: 7px 18px; font-size: 13px; min-width: 70px;
+}
+QInputDialog QPushButton:hover, QMessageBox QPushButton:hover, QFileDialog QPushButton:hover {
+    background-color: #31314a; border-color: #40405e;
+}
+QInputDialog QPushButton:default, QMessageBox QPushButton:default {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6d5ef0, stop:1 #4f7de0);
+    border: none; color: #ffffff; font-weight: 600;
+}
+QFileDialog QTreeView, QFileDialog QListView, QFileDialog QTableView {
+    background-color: #16161f; color: #f2f2f8; border: 1px solid #2c2c42; border-radius: 8px;
+}
+QFileDialog QTreeView::item:selected, QFileDialog QListView::item:selected {
+    background: #2a2650; color: #ffffff;
+}
+
+/* ---------- 下载列表 ---------- */
+QListWidget#downloadList {
+    background-color: #101018; border: 1px solid #26263a; border-radius: 10px;
+    color: #d8d8e8; outline: none; padding: 4px;
+}
+QListWidget#downloadList::item {
+    border-radius: 7px; padding: 6px 10px; background: transparent;
+    border: 1px solid transparent;
+}
+QListWidget#downloadList::item:hover { background: #1e1e2c; }
+QListWidget#downloadList::item:selected { background: #2a2650; border: 1px solid #5245ad; color: #ffffff; }
+
+/* ---------- 模型管理 ---------- */
+QTreeWidget#modelTree {
+    background-color: #101018; border: 1px solid #26263a; border-radius: 12px;
+    color: #d8d8e8; font-size: 12px; outline: none; padding: 6px;
+}
+QTreeWidget#modelTree::item {
+    height: 28px; border-radius: 7px; padding: 0 6px;
+}
+QTreeWidget#modelTree::item:hover { background: #1e1e2c; }
+QTreeWidget#modelTree::item:selected { background: #2a2650; color: #ffffff; border: none; }
+QFrame#modelDetail {
+    background-color: #16161f; border: 1px solid #26263a; border-radius: 12px;
+}
+QFrame#modelDetail QLabel { color: #d8d8e8; }
+QFrame#modelDetail QLineEdit {
+    background-color: #21212e; border: 1px solid #2c2c42; border-radius: 10px;
+    color: #f2f2f8; padding: 6px 10px;
+}
 
 /* ---------- 其他 ---------- */
 QSplitter::handle { background: #1f1f2c; width: 3px; }

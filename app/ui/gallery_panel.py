@@ -160,6 +160,14 @@ class GalleryPanel(QWidget):
         bar2.addWidget(copy_n_btn)
 
         bar2.addSpacing(6)
+        self.dl_models_btn = QPushButton(tr("下载模型"))
+        self.dl_models_btn.setObjectName("ghost")
+        self.dl_models_btn.setToolTip(tr("下载当前图片使用的模型到 ComfyUI（需先在设置中选择 ComfyUI 文件夹）"))
+        self.dl_models_btn.setCursor(Qt.PointingHandCursor)
+        self.dl_models_btn.clicked.connect(self._download_current_models)
+        bar2.addWidget(self.dl_models_btn)
+
+        bar2.addSpacing(6)
         bar2.addWidget(self._tool_label(tr("大小")))
         self.zoom = QSlider(Qt.Horizontal)
         self.zoom.setRange(150, 420)
@@ -617,10 +625,20 @@ class GalleryPanel(QWidget):
         for g in self.store.groups:
             gmenu.addAction(g, lambda gg=g: self._set_group_of(rec, gg))
         menu.addAction(tr("从当前分组移除"), lambda: self._set_group_of(rec, ""))
+        # 下载模型子菜单
+        dmenu = menu.addMenu(tr("下载模型 ▸"))
+        dl_ms = [m for m in (rec.get("models") or []) if (m.get("url") or "").strip()]
+        if dl_ms:
+            for m in dl_ms:
+                lbl = f"{m.get('type') or '其他'}: {m.get('name') or ''}"
+                dmenu.addAction(lbl, lambda mm=m: self._download_models_for(rec, [mm]))
+        else:
+            dmenu.addAction(tr("该图片没有可下载的模型"), lambda: None)
+            dmenu.setEnabled(False)
         # 主模型链接
         main_url = ""
         for m in (rec.get("models") or []):
-            if m.get("type") == tr("大模型") and m.get("url"):
+            if m.get("type") == "大模型" and m.get("url"):
                 main_url = m["url"]
                 break
         if not main_url:
@@ -639,6 +657,41 @@ class GalleryPanel(QWidget):
         self.store.set_record_group(rec["id"], group)
         self.groupChanged.emit()
         self.reload()
+
+    # ---------- 模型下载（ComfyUI） ----------
+    def _download_current_models(self):
+        """工具栏按钮：下载当前选中图片的全部模型。"""
+        rec = self._current_record()
+        if not rec:
+            QToolTip.showText(QCursor.pos(), tr("请先选中一张图片"))
+            return
+        ms = [m for m in (rec.get("models") or []) if (m.get("url") or "").strip()]
+        if not ms:
+            QMessageBox.information(self, tr("AI绘图资料整理"),
+                                    tr("该图片没有可下载的模型（无链接）。"))
+            return
+        self._download_models_for(rec, ms)
+
+    def _download_models_for(self, rec, models: list):
+        """下载指定模型列表到 ComfyUI（由 DownloadManager 调度，独立列表页查看进度）。"""
+        from PySide6.QtGui import QCursor
+        from app.ui.download_manager import DownloadManager
+        win = self.window()
+        mgr: DownloadManager = getattr(win, "download_manager", None)
+        if mgr is None:
+            return
+        for m in models:
+            mgr.start(m, parent_widget=self, src_pos=QCursor.pos())
+
+    def _current_record(self):
+        if self._view_mode == "table":
+            row = self.detail.currentRow()
+            if row >= 0:
+                item = self.detail.item(row, 0)
+                return self._by_uid.get(item.data(Qt.UserRole)) if item else None
+        li = self.gallery.currentItem()
+        return self._by_uid.get(li.data(Qt.UserRole)) if li else None
+
 
     def _copy(self, rec, which):
         pos = rec.get("positive") or ""

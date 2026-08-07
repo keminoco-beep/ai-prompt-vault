@@ -224,6 +224,82 @@ _LANG_TABLES = {
         "待保存 {n} 条": "{n} pending",
         "提示词": "Prompt",
         "没有符合条件的图片\n": "No matching images\n",
+
+        # ---- v2.4.0 ComfyUI 集成 ----
+        "界面语言": "UI Language",
+        "ComfyUI 文件夹": "ComfyUI Folder",
+        "选择 ComfyUI 根目录（含 models/ 子目录）": "Select the ComfyUI root folder (contains models/)",
+        "浏览…": "Browse...",
+        "设置后可在图库一键下载图片使用的模型到 ComfyUI 对应类别的模型文件夹。":
+            "After setting this, you can one-click download a picture's models into ComfyUI's matching model folders.",
+        "下载模型": "Download Models",
+        "下载当前图片使用的模型到 ComfyUI（需先在设置中选择 ComfyUI 文件夹）":
+            "Download this picture's models into ComfyUI (set the ComfyUI folder in Settings first)",
+        "选择模型类型": "Select Model Type",
+        "模型「{name}」属于『其他』类型，请选择要保存到的 ComfyUI 模型文件夹：":
+            "Model \"{name}\" is of type \"Other\". Choose the ComfyUI model folder to save to:",
+        "模型类型": "Model Type",
+        "正在下载：{name}": "Downloading: {name}",
+        "正在下载：{name}（{mb:.0f} MB）": "Downloading: {name} ({mb:.0f} MB)",
+        "取消": "Cancel",
+        "模型「{name}」已存在，跳过下载。": "Model \"{name}\" already exists, skipped.",
+        "模型「{name}」已下载到：\n{path}": "Model \"{name}\" downloaded to:\n{path}",
+        "模型「{name}」下载失败：{err}": "Failed to download model \"{name}\": {err}",
+        "模型「{name}」解析下载链接失败：{err}": "Failed to resolve download link for \"{name}\": {err}",
+        "该图片没有可下载的模型（无链接）。": "No downloadable models for this picture (no links).",
+        "该图片没有可下载的模型": "No downloadable models for this picture",
+        "请先在「设置」中选择 ComfyUI 文件夹，再下载模型。":
+            "Please select the ComfyUI folder in Settings first, then download models.",
+        "下载": "Download",
+        "下载到 ComfyUI 对应模型文件夹": "Download into ComfyUI's matching model folder",
+
+        # ---- v2.4.1 模型管理面板 ----
+        "模型管理": "Models",
+        "管理 ComfyUI 中已安装的模型：重命名、删除、添加备注。":
+            "Manage models installed in ComfyUI: rename, delete, add notes.",
+        "搜索模型名…": "Search model names...",
+        "类型": "Type",
+        "刷新": "Refresh",
+        "（根目录）": "(root)",
+        "未选中模型": "No model selected",
+        "备注": "Note",
+        "添加备注（保存在资料库，不修改文件）…": "Add a note (saved in Library, does not modify the file)...",
+        "保存备注": "Save Note",
+        "重命名": "Rename",
+        "复制文件名": "Copy File Name",
+        "打开所在文件夹": "Show in Folder",
+        "删除": "Delete",
+        "尚未链接 ComfyUI。请先在「设置」中选择 ComfyUI 文件夹。":
+            "ComfyUI is not linked yet. Select the ComfyUI folder in Settings first.",
+        "新文件名：": "New file name:",
+        "同名文件已存在": "A file with the same name already exists",
+        "重命名失败：{err}": "Rename failed: {err}",
+        "重命名成功 ✓": "Renamed ✓",
+        "文件名已复制 ✓": "File name copied ✓",
+        "确定删除模型「{name}」吗？\n此操作会直接删除文件，无法恢复。":
+            "Delete model \"{name}\"?\nThis permanently deletes the file and cannot be undone.",
+        "删除失败：{err}": "Delete failed: {err}",
+        "已删除 ✓": "Deleted ✓",
+        "备注已保存 ✓": "Note saved ✓",
+        "大小": "Size",
+
+        # ---- v2.4.3 下载列表页 ----
+        "下载列表": "Downloads",
+        "正在下载的模型与最近完成的历史。取消会自动清理残留缓存。":
+            "Active downloads and recent history. Cancel auto-cleans up partial files.",
+        "正在下载": "Downloading",
+        "历史记录": "History",
+        "清空历史": "Clear history",
+        "暂无下载任务。从图库/详情面板点击「下载模型」即可在此查看进度。":
+            "No downloads yet. Click 'Download Models' in gallery or details to track progress here.",
+        "完成": "Done",
+        "失败": "Failed",
+        "已取消": "Cancelled",
+        "暂停": "Pause",
+        "继续": "Resume",
+        "已暂停": "Paused",
+        "该文件已不存在（可能已移动/删除）。":
+            "The file no longer exists (it may have been moved or deleted).",
     },
 }
 
