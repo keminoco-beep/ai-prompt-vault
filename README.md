@@ -118,6 +118,23 @@ Library/
 [MIT](LICENSE)
 
 ## Changelog
+### v2.4.10 (2026-08-08)
+- Buttons now auto-size to their text (removed fixed widths) so labels like
+  Download / Open / Pause / Delete are never clipped
+- Model type terminology: "大模型" shown as "基础模型" in Chinese, "Checkpoint"
+  in English (storage key stays compatible)
+- Fixed model type chips showing Chinese in English UI (now localized)
+
+### v2.4.9 (2026-08-08)
+- Model type label shown as Checkpoint (EN) / 基础模型 (ZH)
+
+### v2.4.8 (2026-08-08)
+- API Key note "For model downloads only" added in Settings
+- Full translation sweep: all error messages, hints, placeholders localized;
+  236 keys, 0 missing translations
+- Code audit: fixed NameError in workers, image download validation &
+  connection close, hover preview cache key mismatch
+
 ### v2.4.7 (2026-08-08)
 - Download list: incremental refresh (no longer rebuilds rows on every update,
   so pause/delete buttons stay clickable)

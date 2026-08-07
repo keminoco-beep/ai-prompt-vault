@@ -269,4 +269,19 @@ QToolButton#collapseBtn {
 }
 QToolButton#collapseBtn:hover { background: #24243a; color: #ffffff; }
 QToolButton#collapseBtn:pressed { background: #181824; }
+
+/* ---------- 设置页 API Key 标注 ---------- */
+#keyNote {
+    color: #7ee0a8; background: #14241c;
+    border: 1px solid #2a5c3f; border-radius: 7px;
+    padding: 2px 8px; font-size: 11px;
+}
+
+/* ---------- 操作按钮：自适应内容（不限制固定宽度），最小 48px 适合 2 个中文字 ---------- */
+QPushButton#ghost, QPushButton#primary {
+    min-width: 48px;
+    padding: 4px 12px;
+}
+/* 更紧凑的下载/打开按钮（在密集列表中使用）—— 不强固定宽度，但保证 padding 一致 */
+
 """

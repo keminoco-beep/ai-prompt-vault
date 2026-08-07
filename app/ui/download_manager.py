@@ -104,8 +104,8 @@ class DownloadTask:
         end = self.end_time or time.time()
         sec = int(end - self.start_time)
         if sec < 60:
-            return f"{sec} 秒"
-        return f"{sec // 60} 分 {sec % 60} 秒"
+            return f"{sec}{tr('秒')}"
+        return f"{sec // 60}{tr('分')} {sec % 60}{tr('秒')}"
 
     def status_label(self) -> str:
         return {"done": "完成", "failed": "失败",
@@ -243,7 +243,8 @@ class DownloadManager(QObject):
         self.taskUpdated.emit(self.HISTORY_ID)
         # API Key 缺失导致的失败：弹引导窗（设置 Key / 打开网页 / 取消）。
         # 只自动弹一次，避免多任务失败时弹窗轰炸（其余失败可点击历史项查看）。
-        if not ok and ("API Key" in msg or "HTML 错误页" in msg or "403" in msg):
+        # 兼容中英文错误消息（"HTML 错误页" / "HTML error page" / API Key / 403）
+        if not ok and any(k in msg for k in ("HTML", "403", "API Key")):
             if not getattr(self, "_guide_shown", False):
                 self._guide_shown = True
                 self._show_apikey_guide(t)

@@ -98,14 +98,12 @@ class _TaskItemWidget(QFrame):
         self.pause_btn = QPushButton(tr("暂停"))
         self.pause_btn.setObjectName("ghost")
         self.pause_btn.setCursor(Qt.PointingHandCursor)
-        self.pause_btn.setFixedWidth(56)
         self.pause_btn.clicked.connect(self._on_pause)
         lay.addWidget(self.pause_btn, 0, Qt.AlignVCenter)
 
         self.cancel_btn = QPushButton(tr("删除"))
         self.cancel_btn.setObjectName("ghost")
         self.cancel_btn.setCursor(Qt.PointingHandCursor)
-        self.cancel_btn.setFixedWidth(56)
         self.cancel_btn.clicked.connect(self._on_cancel)
         lay.addWidget(self.cancel_btn, 0, Qt.AlignVCenter)
 

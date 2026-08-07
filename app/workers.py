@@ -8,7 +8,7 @@ import re
 
 from PySide6.QtCore import QRunnable, Signal, QObject
 
-from app.i18n import t as tr
+from app.i18n import t as tr, tr_format
 from app import civitai
 
 

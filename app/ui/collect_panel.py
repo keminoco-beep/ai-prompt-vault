@@ -17,7 +17,7 @@ from app.workers import Worker, WorkerSignals
 # 模型清单中每行可选的类型（含 Civitai 常见类型的中文标签）
 MODEL_TYPE_CHOICES = [tr("大模型"), "LoRA", tr("嵌入"), tr("VAE"), tr("超网络"), tr("ControlNet"),
                       tr("放大模型"), tr("工作流"), tr("运动模块"), tr("文本编码器"), tr("其他")]
-PLACEHOLDER_TEXT = "把网页上的例图直接拖到这里\n\n或按 Ctrl+V 粘贴剪贴板里的图片\n\n也支持拖入 / 粘贴 Civitai 链接，自动提取提示词与全部模型"
+PLACEHOLDER_TEXT = tr("把网页上的例图直接拖到这里\n\n或按 Ctrl+V 粘贴剪贴板里的图片\n\n也支持拖入 / 粘贴 Civitai 链接，自动提取提示词与全部模型")
 
 
 def _placeholder_pixmap(size: int) -> QPixmap:
@@ -335,11 +335,9 @@ class CollectPanel(QWidget):
         url_edit.setPlaceholderText(tr("模型链接（Civitai 导入自动填写，可点击打开）"))
         open_btn = QPushButton(tr("打开"))
         open_btn.setObjectName("ghost")
-        open_btn.setFixedWidth(52)
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url_edit.text().strip())))
         del_btn = QPushButton("×")
         del_btn.setObjectName("ghost")
-        del_btn.setFixedWidth(30)
         del_btn.clicked.connect(lambda: self._remove_model_row(row))
 
         h.addWidget(name_edit, 3)
@@ -790,7 +788,7 @@ class CollectPanel(QWidget):
         if not self.pending:
             return
         from PySide6.QtWidgets import QMessageBox
-        ret = QMessageBox.question(self, tr("AI绘图资料整理"),
+        ret = QMessageBox.question(self, tr("AI-Prompt-Vault"),
                                    tr_format("清空 {len(self.pending)} 条待保存内容？（已保存到资料库的记录不受影响）"),
                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ret != QMessageBox.Yes:

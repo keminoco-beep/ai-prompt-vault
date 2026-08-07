@@ -40,7 +40,7 @@ class SettingsDialog(QDialog):
         row.addWidget(self.lang_combo)
         root.addLayout(row)
 
-        hint = QLabel("切换语言后重启软件即可生效。\nRestart the app to apply language changes.")
+        hint = QLabel(tr("切换语言后重启软件即可生效。"))
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         root.addWidget(hint)
@@ -72,16 +72,19 @@ class SettingsDialog(QDialog):
         klb = QLabel(tr("Civitai API Key"))
         klb.setObjectName("fieldLabel")
         key_row.addWidget(klb)
+        # 标注：API 仅用于下载模型（不上传任何数据）
+        key_note = QLabel(tr("仅用于下载模型"))
+        key_note.setObjectName("keyNote")
+        key_note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        key_row.addWidget(key_note)
         self.key_edit = QLineEdit()
-        self.key_edit.setPlaceholderText("civ_...（可选，解决模型下载 403 / HTML 错误页）")
+        self.key_edit.setPlaceholderText(tr("civ_...（可选，解决模型下载 403 / HTML 错误页）"))
         self.key_edit.setText(self.store.load_setting("civitai_api_key", ""))
         key_row.addWidget(self.key_edit, 1)
         root.addLayout(key_row)
 
         khint = QLabel(
-            "在 Civitai 用户中心（https://civitai.red/user/account → API Keys → New API Key）生成，"
-            "粘贴到这里即可让模型下载携带登录凭证。\n"
-            "Generate at civitai.red/user/account → API Keys. Needed to download models without 403.")
+            tr("在 Civitai 用户中心（https://civitai.red/user/account → API Keys → New API Key）生成，粘贴到这里即可让模型下载携带登录凭证。"))
         khint.setObjectName("hint")
         khint.setWordWrap(True)
         root.addWidget(khint)
@@ -117,4 +120,4 @@ class SettingsDialog(QDialog):
             i18n.set_language(code)
             QMessageBox.information(
                 self, tr(APP_NAME),
-                "语言已切换，重启软件后生效。\nLanguage changed. Restart the app to apply.")
+                tr("语言已切换，重启软件后生效。"))

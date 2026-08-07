@@ -458,7 +458,7 @@ class GalleryPanel(QWidget):
     @staticmethod
     def _models_brief(models: list, loras: list) -> str:
         parts = []
-        main = next((m for m in models if m.get("type") == tr("大模型")), None)
+        main = next((m for m in models if m.get("type") == "大模型"), None)
         if main:
             parts.append(main.get("name") or "")
         lora_names = [m.get("name") for m in models if m.get("type") == "LoRA" and m.get("name")]
@@ -497,8 +497,9 @@ class GalleryPanel(QWidget):
     def _hover_pixmap(self, r: dict) -> QPixmap:
         """悬停预览图：一次缩放到位并缓存，避免每次 hover 的磁盘 IO + 缩放开销。"""
         uid = r.get("id")
-        if uid in self._pm_cache and not self._pm_cache[uid].isNull():
-            return self._pm_cache[uid]
+        key = f"hover:{uid}"
+        if key in self._pm_cache and not self._pm_cache[key].isNull():
+            return self._pm_cache[key]
         pm = None
         if r.get("thumb_file"):
             pm = load_pixmap(str(self.store.thumbs_dir / r["thumb_file"]), 480)
@@ -508,7 +509,9 @@ class GalleryPanel(QWidget):
             pm = _no_image_pixmap(120)
         # 预缩放为悬浮窗所需尺寸（380 内等比），show_image 直接 setPixmap 零开销
         scaled = pm.scaled(HOVER_MAX_W, HOVER_MAX_H, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self._pm_cache[uid] = scaled
+        if len(self._pm_cache) > 500:
+            self._pm_cache.clear()
+        self._pm_cache[key] = scaled
         return scaled
 
     def _wrap_stack(self) -> QWidget:
@@ -630,7 +633,7 @@ class GalleryPanel(QWidget):
         dl_ms = [m for m in (rec.get("models") or []) if (m.get("url") or "").strip()]
         if dl_ms:
             for m in dl_ms:
-                lbl = f"{m.get('type') or '其他'}: {m.get('name') or ''}"
+                lbl = f"{tr(m.get('type') or '其他')}: {m.get('name') or ''}"
                 dmenu.addAction(lbl, lambda mm=m: self._download_models_for(rec, [mm]))
         else:
             dmenu.addAction(tr("该图片没有可下载的模型"), lambda: None)
@@ -667,7 +670,7 @@ class GalleryPanel(QWidget):
             return
         ms = [m for m in (rec.get("models") or []) if (m.get("url") or "").strip()]
         if not ms:
-            QMessageBox.information(self, tr("AI绘图资料整理"),
+            QMessageBox.information(self, tr("AI-Prompt-Vault"),
                                     tr("该图片没有可下载的模型（无链接）。"))
             return
         self._download_models_for(rec, ms)
@@ -705,7 +708,7 @@ class GalleryPanel(QWidget):
             if neg:
                 parts.append(f"Negative prompt: {neg}")
             ms = rec.get("models") or []
-            mains = [m for m in ms if m.get("type") == tr("大模型")]
+            mains = [m for m in ms if m.get("type") == "大模型"]
             meta = []
             if rec.get("steps"):
                 meta.append(f"Steps: {rec['steps']}")
@@ -769,7 +772,7 @@ class GalleryPanel(QWidget):
 
     def _delete(self, rec):
         ret = QMessageBox.question(
-            self, tr("AI绘图资料整理"),
+            self, tr("AI-Prompt-Vault"),
             tr_format("确定删除「{title}」吗？\n图片将移入资料库回收站。",
                       title=rec.get("title") or rec["id"]),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)

@@ -252,6 +252,7 @@ _LANG_TABLES = {
             "Please select the ComfyUI folder in Settings first, then download models.",
         "下载": "Download",
         "下载到 ComfyUI 对应模型文件夹": "Download into ComfyUI's matching model folder",
+        "仅用于下载模型": "For model downloads only",
 
         # ---- v2.4.1 模型管理面板 ----
         "模型管理": "Models",
@@ -300,6 +301,44 @@ _LANG_TABLES = {
         "已暂停": "Paused",
         "该文件已不存在（可能已移动/删除）。":
             "The file no longer exists (it may have been moved or deleted).",
+
+        # ---- v2.4.8 翻译漏洞修复 ----
+        "模型链接为空": "Model URL is empty",
+        "该模型暂无可下载文件": "No downloadable file for this model",
+        "未知模型类型：": "Unknown model type: ",
+        "返回 HTML 错误页（可能需要 Civitai API Key）":
+            "Got an HTML error page (may need a Civitai API Key)",
+        "下载不完整（{got}/{total}）": "Incomplete download ({got}/{total})",
+        "文件过小（{got} 字节），疑似错误响应":
+            "File too small ({got} bytes), likely an error response",
+        "下载到的是错误页（HTML/JSON），可能需要 Civitai API Key":
+            "Downloaded an error page (HTML/JSON), may need a Civitai API Key",
+        "下载失败": "Download failed",
+        "分": " min",
+        "秒": " sec",
+        "civ_...（可选，解决模型下载 403 / HTML 错误页）":
+            "civ_... (optional, fixes 403 / HTML error pages)",
+        "在 Civitai 用户中心（https://civitai.red/user/account → API Keys → New API Key）生成，粘贴到这里即可让模型下载携带登录凭证。":
+            "Generate at civitai.red/user/account → API Keys → New API Key. Paste here so model downloads carry your login credentials.",
+        "切换语言后重启软件即可生效。": "Restart the app to apply language changes.",
+        "语言已切换，重启软件后生效。": "Language changed. Restart the app to apply.",
+        ": 页面未包含该图片数据": ": page does not contain this image's data",
+        "无图片地址": "No image URL",
+        "(无图片)": "(no image)",
+        "(无标题)": "(untitled)",
+        "(未选中)": "(none selected)",
+        "下载中": "Downloading",
+        "等待": "Waiting",
+        "下载模型 ▸": "Download Models ▸",
+        "去设置": "Go to Settings",
+        "打开模型页": "Open Model Page",
+        "选择 ComfyUI 根目录": "Select the ComfyUI root folder",
+        "重命名模型": "Rename Model",
+        "下载失败：需要登录态（API Key）": "Download failed: login (API Key) required",
+        "模型「{name}」下载失败：{err}\n\nCivitai 官方下载需要登录凭证。你可以：\n① 在「设置」填入 Civitai API Key 后重试\n② 直接打开 Civitai 模型页手动下载":
+            "Model \"{name}\" failed to download: {err}\n\nCivitai downloads need a login. You can:\n① Add your Civitai API Key in Settings and retry\n② Open the Civitai model page to download manually",
+        "把网页上的例图直接拖到这里\n\n或按 Ctrl+V 粘贴剪贴板里的图片\n\n也支持拖入 / 粘贴 Civitai 链接，自动提取提示词与全部模型":
+            "Drag example images here\n\nor press Ctrl+V to paste from the clipboard\n\nYou can also paste Civitai links to auto-extract the prompt and all models",
     },
 }
 
@@ -336,9 +375,16 @@ def set_language(lang: str) -> bool:
 
 def t(text: str) -> str:
     """按当前语言翻译；中文或无翻译时返回原文。"""
-    if _current == "zh" or not text:
-        return text
+    # 中文别名：把口语化术语替换为更准确的称呼（存储 key 保持不变）
+    if _current == "zh":
+        return _ZH_ALIASES.get(text, text)
     return _LANG_TABLES.get(_current, {}).get(text, text)
+
+
+# 中文界面别名：让 UI 文本更专业，但存储 key 仍是"大模型"等保证向后兼容
+_ZH_ALIASES = {
+    "大模型": "基础模型",  # Checkpoint / Base Model
+}
 
 
 def rev(text: str) -> str:

@@ -11,6 +11,7 @@ from pathlib import Path
 import requests
 
 from app import civitai
+from app.i18n import t as tr, tr_format
 
 # 模型类型（软件内中文 key）→ ComfyUI models/ 标准子目录
 COMIFY_MODEL_DIRS = {
@@ -58,7 +59,7 @@ def comfy_dir_for(comfyui_dir, mtype: str, picked: str = "") -> Path:
     root = Path(comfyui_dir)
     sub = COMIFY_MODEL_DIRS.get(mtype, "") or picked
     if not sub:
-        raise ComfyError(f"未知模型类型：{mtype}")
+        raise ComfyError(f"{tr('未知模型类型：')}{mtype}")
     d = (root / "models" / sub) if not (root.name == sub) else root
     # 若用户选择的就是根目录下的子目录名，避免双重嵌套
     if (root / "models").exists() and (root / "models" / sub).is_dir():
@@ -102,7 +103,7 @@ def resolve_download_url(model_url: str, timeout: float = 15.0) -> str:
     """
     url = (model_url or "").strip()
     if not url:
-        raise ComfyError("模型链接为空")
+        raise ComfyError(tr("模型链接为空"))
     if "/api/download/models/" in url:
         base, _, q = url.partition("?")
         params = [p for p in q.split("&") if p and not p.startswith("type=")]
@@ -122,7 +123,7 @@ def resolve_download_url(model_url: str, timeout: float = 15.0) -> str:
                 fmt = "SafeTensor" if "safetensor" in (f.get("format") or "").lower() else ""
                 params = ["type=Model"] + ([f"format={fmt}"] if fmt else [])
                 return base + "?" + "&".join(params)
-        raise ComfyError("该模型暂无可下载文件")
+        raise ComfyError(tr("该模型暂无可下载文件"))
     # 其他 URL（合法 CDN 直链等）原样返回，保持兼容
     return url
 
@@ -227,7 +228,7 @@ def download_file(url: str, dest: Path, progress_cb=None, cancel_cb=None, pause_
                 ctype = r.headers.get("content-type") or ""
                 # 预判：响应类型是 HTML → 换方案
                 if "text/html" in ctype.lower():
-                    raise ComfyError("返回 HTML 错误页（可能需要 Civitai API Key）")
+                    raise ComfyError(tr("返回 HTML 错误页（可能需要 Civitai API Key）"))
                 got = base_got
                 first = b""
                 with open(tmp, mode) as f:
@@ -244,11 +245,11 @@ def download_file(url: str, dest: Path, progress_cb=None, cancel_cb=None, pause_
                         if cancel_cb and cancel_cb():
                             raise ComfyError("已取消")
                 if total and got != total:
-                    raise ComfyError(f"下载不完整（{got}/{total}）")
+                    raise ComfyError(tr_format("下载不完整（{got}/{total}）", got=got, total=total))
                 if got < min_size:
-                    raise ComfyError(f"文件过小（{got} 字节），疑似错误响应")
+                    raise ComfyError(tr_format("文件过小（{got} 字节），疑似错误响应", got=got))
                 if _looks_like_error_page(first):
-                    raise ComfyError("下载到的是错误页（HTML/JSON），可能需要 Civitai API Key")
+                    raise ComfyError(tr("下载到的是错误页（HTML/JSON），可能需要 Civitai API Key"))
             tmp.replace(dest)
             return True, str(dest)
         except Exception as e:  # noqa: BLE001
@@ -262,7 +263,7 @@ def download_file(url: str, dest: Path, progress_cb=None, cancel_cb=None, pause_
                     tmp.unlink()
                 except Exception:
                     pass
-    msg = "；".join(errs) or "下载失败"
+    msg = "；".join(errs) or tr("下载失败")
     _log_download_error(dest.name, url, msg)
     return False, msg
 

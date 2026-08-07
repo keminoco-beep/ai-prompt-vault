@@ -15,6 +15,7 @@ import html as html_mod
 import json
 import re
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
@@ -496,7 +497,7 @@ def fetch_image(id: int, timeout: float = 18.0, max_attempts: int = 2) -> dict:
                     if best is None:
                         best = rec  # 降级结果暂存
                 else:
-                    errs.append(f"{host}: 页面未包含该图片数据")
+                    errs.append(f"{host}{tr(': 页面未包含该图片数据')}")
             except Exception as e:  # noqa: BLE001
                 code = getattr(e.response, "status_code", None) if getattr(e, "response", None) else None
                 errs.append(f"{host}" + (f" HTTP {code}" if code else f" {type(e).__name__}"))
@@ -573,13 +574,34 @@ def download_image(url: str, dest: str, timeout: float = 30.0) -> tuple:
     last_err = tr("无图片地址")
     for u in candidates:
         try:
-            r = requests.get(u, headers=UA, timeout=timeout, stream=True)
-            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
-                with open(dest, "wb") as f:
-                    for chunk in r.iter_content(65536):
-                        f.write(chunk)
-                return True, ""
-            last_err = f"HTTP {r.status_code}"
+            with requests.get(u, headers=UA, timeout=timeout, stream=True) as r:
+                ctype = (r.headers.get("content-type") or "").lower()
+                # 允许 image/* 与通用二进制（部分 CDN 返回 application/octet-stream）
+                if r.status_code == 200 and (ctype.startswith("image") or ctype in (
+                        "application/octet-stream", "application/binary", "")):
+                    with open(dest, "wb") as f:
+                        for chunk in r.iter_content(65536):
+                            f.write(chunk)
+                    # 完整性校验：非空 + 可解码为图片
+                    if Path(dest).stat().st_size > 0 and _is_valid_image(dest):
+                        return True, ""
+                    last_err = "下载内容不是有效图片"
+                    try:
+                        Path(dest).unlink()
+                    except Exception:
+                        pass
+                    continue
+                last_err = f"HTTP {r.status_code}"
         except Exception as e:  # noqa: BLE001
             last_err = type(e).__name__
     return False, last_err
+
+
+def _is_valid_image(path) -> bool:
+    """校验文件可被解码为图片（避免下载到错误页/半截数据）。"""
+    try:
+        from PySide6.QtGui import QImage
+        img = QImage(path)
+        return not img.isNull()
+    except Exception:
+        return False

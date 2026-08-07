@@ -240,11 +240,9 @@ class DetailDialog(QDialog):
         url_edit.setPlaceholderText(tr("模型链接（可选）"))
         open_btn = QPushButton(tr("打开"))
         open_btn.setObjectName("ghost")
-        open_btn.setFixedWidth(52)
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url_edit.text().strip())))
         del_btn = QPushButton("×")
         del_btn.setObjectName("ghost")
-        del_btn.setFixedWidth(30)
         del_btn.clicked.connect(lambda: self._remove_model_row(row))
         h.addWidget(name_edit, 3)
         h.addWidget(type_combo, 1)
@@ -304,7 +302,7 @@ class DetailDialog(QDialog):
                 meta.append(f"CFG scale: {r['cfg']}")
             if r["seed"]:
                 meta.append(f"Seed: {r['seed']}")
-            main_models = [m for m in r["models"] if m.get("type") == tr("大模型")]
+            main_models = [m for m in r["models"] if m.get("type") == "大模型"]
             if main_models:
                 meta.append(f"Model: {main_models[0]['name']}")
             if r["base_model"] and r["base_model"] != tr("其他"):
