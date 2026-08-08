@@ -56,6 +56,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare release assets
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $env:PYTHONIOENCODING = 'utf-8'
+          New-Item -ItemType Directory -Path staging -Force | Out-Null
+          $exe = "staging/AI-Prompt-Vault-$env:RELEASE_TAG-win64.exe"
+          Copy-Item dist/AI绘图资料整理.exe $exe
+          # 解压即用 zip：exe + 四语说明书
+          Compress-Archive -Path $exe, "docs/使用说明_中文.txt", "docs/README_English.txt", "docs/README_Español.txt", "docs/README_日本語.txt" -DestinationPath "staging/AI-Prompt-Vault-$env:RELEASE_TAG-win64.zip" -Force
+          # 英文截图
+          Copy-Item docs/screenshots/*.png staging/
+          Get-ChildItem staging | ForEach-Object { Write-Output "asset: $($_.Name) $([math]::Round($_.Length/1MB,1))MB" }
+
       - name: Smoke test exe
         shell: pwsh
         run: |
@@ -65,8 +80,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AI绘图资料整理-windows-x64
-          path: dist/AI绘图资料整理.exe
+          name: release-assets
+          path: staging/*
 
   # Optional: attach the exe to a GitHub Release when a tag like v1.2.3 is pushed
   release:
@@ -78,8 +93,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: AI绘图资料整理-windows-x64
-          path: dist
+          name: release-assets
+          path: staging
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/AI绘图资料整理.exe
+          files: staging/*
