@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QColor
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QLineEdit, QComboBox, QTreeWidget, QTreeWidgetItem,
                                QInputDialog, QMessageBox, QSplitter, QFrame, QSizePolicy)
@@ -23,6 +23,24 @@ from app.i18n import t as tr, tr_format
 from app.config import APP_NAME
 
 _NOTES_FILENAME = "model_notes.json"
+
+# 模型健康状态 → 树节点后缀标记（运行时调用 tr，避免 i18n 未初始化）
+def _badge(status: str) -> str:
+    return {
+        "ok": "",
+        "zero": "  ⚠ " + tr("空文件"),
+        "tiny": "  ⚠ " + tr("疑似损坏"),
+        "part": "  ⚠ " + tr("下载残留"),
+    }.get(status, "")
+
+
+def _status_detail(status: str) -> str:
+    return {
+        "ok": "",
+        "zero": tr("⚠ 空文件（0 字节）：下载中断或写盘失败，建议删除后重新下载。"),
+        "tiny": tr("⚠ 疑似损坏（小于 1KB）：可能是错误响应被误存，建议删除后重新下载。"),
+        "part": tr("⚠ 存在 .part 下载残留：上一次下载未完成，文件可能不完整。"),
+    }.get(status, "")
 
 
 def _fmt_size(n: int) -> str:
@@ -79,6 +97,9 @@ class ModelPanel(QWidget):
         refresh_btn.setCursor(Qt.PointingHandCursor)
         refresh_btn.clicked.connect(self.reload)
         bar.addWidget(refresh_btn)
+        self.health_label = QLabel("")
+        self.health_label.setObjectName("hint")
+        bar.addWidget(self.health_label)
         root.addLayout(bar)
 
         # 主区：左列表 + 右详情
@@ -107,6 +128,12 @@ class ModelPanel(QWidget):
         self.info_meta.setObjectName("hint")
         self.info_meta.setWordWrap(True)
         rl.addWidget(self.info_meta)
+
+        # 健康状态（红字说明）
+        self.info_health = QLabel("")
+        self.info_health.setObjectName("hint")
+        self.info_health.setWordWrap(True)
+        rl.addWidget(self.info_health)
 
         note_lb = QLabel(tr("备注"))
         note_lb.setObjectName("popupSection")
@@ -205,18 +232,37 @@ class ModelPanel(QWidget):
         for p in root.rglob("*"):
             if not p.is_file() or p.name.endswith(".part"):
                 continue
-            if p.suffix.lower() not in exts:
+            suf = p.suffix.lower()
+            if suf not in exts or suf == ".txt":
+                # .txt 是 ComfyUI 里的指引/说明文件，不是模型，健康检查忽略
                 continue
             rel = p.relative_to(root).as_posix()
             sub = str(p.parent.relative_to(root)) if p.parent != root else ""
             st = p.stat()
+            status = "ok"
+            if st.st_size == 0:
+                status = "zero"          # 空文件
+            elif st.st_size < 1024:
+                status = "tiny"          # 疑似损坏（<1KB，可能是错误响应）
+            if Path(str(p) + ".part").exists():
+                status = "part"          # 存在下载残留 .part
             self._models.append({
                 "rel": rel, "abs": str(p), "subdir": sub,
                 "size": st.st_size, "mtime": st.st_mtime,
+                "status": status,
             })
         for sub in sorted({m["subdir"] for m in self._models}):
             self.type_combo.addItem(sub or tr("（根目录）"))
         self.type_combo.blockSignals(False)
+        # 健康摘要
+        bad = [m for m in self._models if m.get("status", "ok") != "ok"]
+        if bad:
+            self.health_label.setText(
+                tr_format("⚠ {n} 个模型健康异常", n=len(bad)))
+            self.health_label.setStyleSheet("color: #ff9aa5;")
+        else:
+            self.health_label.setText(tr("全部模型正常 ✓"))
+            self.health_label.setStyleSheet("")
         self._apply_filter()
         self._current = None
         self._show_none()
@@ -246,9 +292,13 @@ class ModelPanel(QWidget):
             self.tree.addTopLevelItem(gitem)
             for m in sorted(groups[sub], key=lambda x: x["rel"].lower()):
                 note = self._notes.get(m["rel"], "")
-                item = QTreeWidgetItem([m["rel"].split("/")[-1] + (f"  · {note}" if note else "")])
+                badge = _badge(m.get("status", "ok"))
+                item = QTreeWidgetItem(
+                    [m["rel"].split("/")[-1] + badge + (f"  · {note}" if note else "")])
                 item.setData(0, Qt.UserRole, m["rel"])
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                if m.get("status", "ok") != "ok":
+                    item.setForeground(0, QColor("#ff9aa5"))
                 gitem.addChild(item)
             gitem.setExpanded(True)
         self.tree.blockSignals(False)
@@ -276,12 +326,17 @@ class ModelPanel(QWidget):
         self.info_meta.setText(
             f"{tr('类型')}: {m['subdir'] or tr('（根目录）')}    "
             f"{tr('大小')}: {_fmt_size(m['size'])}    {mtime}\n{m['abs']}")
+        detail = _status_detail(m.get("status", "ok"))
+        self.info_health.setText(detail)
+        self.info_health.setStyleSheet("color: #ff9aa5;" if detail else "")
         self.note_edit.setText(self._notes.get(m["rel"], ""))
 
     def _show_none(self):
         self._current = None
         self.info_name.setText(tr("未选中模型"))
         self.info_meta.setText("")
+        self.info_health.setText("")
+        self.info_health.setStyleSheet("")
         self.note_edit.setText("")
 
     # ---------- 操作 ----------

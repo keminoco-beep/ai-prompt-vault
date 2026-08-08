@@ -1,5 +1,6 @@
 from app.i18n import t as tr, rev, tr_format
 """浏览面板：平铺大图 / 详细信息列表两种显示模式，排序、筛选、悬浮详情、复制、分组。"""
+from pathlib import Path
 from PySide6.QtCore import Qt, QEvent, QTimer, QPoint, QSize, Signal, QSortFilterProxyModel
 from PySide6.QtGui import QPixmap, QPainter, QColor, QFont, QCursor
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -8,7 +9,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineE
                                QApplication, QStackedLayout, QSplitter, QMessageBox,
                                QToolTip, QHeaderView, QAbstractItemView)
 
-from app.filters import filter_records, unique_loras, ratio_bucket, ratio_text, group_counts
+from app.filters import filter_records, unique_loras, unique_tags, ratio_bucket, ratio_text, group_counts
 from app.civitai import BASE_MODEL_GROUPS
 from app.thumbs import load_pixmap, rounded_pixmap
 from app.ui.hover_popup import HoverPopup, MAX_W as HOVER_MAX_W, MAX_H as HOVER_MAX_H
@@ -16,11 +17,25 @@ from app.ui.detail_dialog import DetailDialog, copy_text
 from app.ui.detail_sidebar import DetailSidebar
 
 SOURCES = ["全部来源", "来自Civitai", "本地导入"]
+# (显示标签, 存储值)：media_type 筛选用英文存储 key
+MEDIA_CHOICES = [("全部媒体", "全部媒体"), ("图片", "image"), ("视频", "video")]
 SORT_KEYS = [("time", tr("导入时间")), ("title", tr("标题")), ("base_model", tr("主模型大类")),
              ("models", tr("模型")), ("size", tr("尺寸"))]
 
 
+_NO_IMG_CACHE = {}   # size -> QPixmap（复用，避免 frozen 环境反复创建 QPixmap/QPainter 卡顿）
+
+# v3.5 分片渲染：大数据量平铺时每批渲染的 item 数与批次间隔（ms）。
+# 根因：真实窗口下 _fill_grid 同步循环为每个 item setIcon（250+ tile 的磁盘 IO +
+# GDI 绘制 → 几十秒卡死）；分批 QTimer 让事件循环在批次间处理绘制/输入，窗口保持可用。
+GRID_CHUNK = 40       # 每批渲染的平铺 item 数
+GRID_CHUNK_MS = 16    # 批次间隔（ms）
+
+
 def _no_image_pixmap(size: int) -> QPixmap:
+    cached = _NO_IMG_CACHE.get(size)
+    if cached is not None and not cached.isNull():
+        return cached
     pm = QPixmap(size, size)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
@@ -33,13 +48,17 @@ def _no_image_pixmap(size: int) -> QPixmap:
     f.setPointSize(10)
     p.setFont(f)
     p.drawText(pm.rect().adjusted(10, 0, -10, 0), Qt.AlignCenter | Qt.TextWordWrap,
-               "暂无图片\n（右键查看来源）")
+               tr("暂无图片\n（右键查看来源）"))
     p.end()
+    if len(_NO_IMG_CACHE) > 8:
+        _NO_IMG_CACHE.clear()
+    _NO_IMG_CACHE[size] = pm
     return pm
 
 
 class GalleryPanel(QWidget):
     groupChanged = Signal()   # 记录加入/移除分组时发出，主窗口连接刷新侧栏计数
+    refreshRequested = Signal()   # v3.5：点击「刷新」→ MainWindow 启动后台输出扫描
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -53,6 +72,14 @@ class GalleryPanel(QWidget):
         self._sort_desc = True
         self._view_mode = "grid"       # grid | table
         self._pm_cache = {}            # uid -> QPixmap（悬停/缩略图缓存，避免磁盘 IO 卡顿）
+        self._scanning = False         # v3.4：后台扫描输出文件夹中（空态提示用）
+        # v3.5：平铺分片渲染（大数据量分批 QTimer，批次间事件循环处理绘制/输入）
+        self._chunk_timer = QTimer(self)
+        self._chunk_timer.setInterval(GRID_CHUNK_MS)
+        self._chunk_timer.timeout.connect(self._render_grid_chunk)
+        self._chunk_records = None     # 分片渲染中的 records（None = 未在分片）
+        self._chunk_size = 0
+        self._chunk_pos = 0
         self._build()
         self._hover_timer = QTimer(self)
         self._hover_timer.setSingleShot(True)
@@ -60,6 +87,61 @@ class GalleryPanel(QWidget):
         self._hover_timer.timeout.connect(self._show_pending_popup)
         self._popup = HoverPopup()
         self.reload()
+
+    def set_scanning(self, scanning: bool):
+        """v3.4：标记后台输出文件夹扫描中（空态显示「正在后台扫描…」提示）。
+
+        由 main_window 在 _start_output_scan / _on_output_scanned 中调用。
+        仅影响空态文案，不影响数据。
+        """
+        self._scanning = bool(scanning)
+
+    # ================= v3.5：手动刷新 =================
+    def _on_refresh_clicked(self):
+        """「刷新」按钮：请求后台重新扫描输出文件夹（增量扫描 + 写缓存）。
+
+        明确不做实时监听（QFileSystemWatcher 等）——手动刷新即可，避免性能开销。
+        - 有 MainWindow：发 refreshRequested 信号 → MainWindow._start_output_scan
+          （后台线程扫描，done 后 _on_output_scanned 无条件 reload），并给状态反馈
+        - 独立使用（无 MainWindow，如测试/单面板）：直接重读磁盘缓存兜底
+        """
+        win = self.window()
+        has_scan = (win is not None and hasattr(win, "_start_output_scan")
+                    and callable(getattr(win, "_start_output_scan", None)))
+        self.refreshRequested.emit()
+        if not has_scan:
+            self.reload()
+        else:
+            # 状态反馈：扫描中标记由 _start_output_scan 设置（空态显示扫描文案）；
+            # 这里再给一个即时 tooltip，图库非空时也能看到反馈
+            try:
+                QToolTip.showText(QCursor.pos(), tr("正在后台扫描输出文件夹…"))
+            except Exception:
+                pass
+
+    # ================= 文件缺失标记（幽灵记录提示） =================
+    def _missing_files(self, rec: dict) -> list:
+        """真实记录的文件缺失检查：image_file/thumb_file/video_file 声明了但文件不存在。
+
+        - 虚拟记录（is_virtual）不检查：文件在 ComfyUI 输出目录，不属于资料库
+        - 仅提示不自动删记录：用户可能外部移动文件但想保留记录
+        """
+        if not rec or rec.get("is_virtual"):
+            return []
+        miss = []
+        if rec.get("image_file") and not (self.store.images_dir / rec["image_file"]).exists():
+            miss.append("image_file")
+        if rec.get("thumb_file") and not (self.store.thumbs_dir / rec["thumb_file"]).exists():
+            miss.append("thumb_file")
+        if rec.get("video_file") and not (self.store.videos_dir / rec["video_file"]).exists():
+            miss.append("video_file")
+        return miss
+
+    def _missing_marker(self, rec: dict) -> str:
+        """标题旁的文件缺失标记（如 "  ⚠ 文件缺失"）；文件齐全返回空串。"""
+        if self._missing_files(rec):
+            return "  ⚠ " + tr("文件缺失")
+        return ""
 
     # ================= UI =================
     def _build(self):
@@ -110,6 +192,19 @@ class GalleryPanel(QWidget):
         self.source_combo.addItems([tr(s) for s in SOURCES])
         self.source_combo.currentTextChanged.connect(self._apply)
         bar.addWidget(self.source_combo)
+
+        bar.addWidget(self._tool_label(tr("媒体")))
+        self.media_combo = QComboBox()
+        for label, key in MEDIA_CHOICES:
+            self.media_combo.addItem(tr(label), key)
+        self.media_combo.currentTextChanged.connect(self._apply)
+        bar.addWidget(self.media_combo)
+
+        bar.addWidget(self._tool_label(tr("标签")))
+        self.tag_combo = QComboBox()
+        self.tag_combo.addItem(tr("全部标签"))
+        self.tag_combo.currentTextChanged.connect(self._apply)
+        bar.addWidget(self.tag_combo)
         root.addLayout(bar)
 
         bar2 = QHBoxLayout()
@@ -167,6 +262,30 @@ class GalleryPanel(QWidget):
         self.dl_models_btn.clicked.connect(self._download_current_models)
         bar2.addWidget(self.dl_models_btn)
 
+        dupe_btn = QPushButton(tr("查重"))
+        dupe_btn.setObjectName("ghost")
+        dupe_btn.setToolTip(tr("检测库中的重复图片（感知哈希）"))
+        dupe_btn.setCursor(Qt.PointingHandCursor)
+        dupe_btn.clicked.connect(self._find_duplicates)
+        bar2.addWidget(dupe_btn)
+
+        # v3.5：手动刷新（不实时监听 QFileSystemWatcher——太耗性能）。
+        # 点击 → refreshRequested → MainWindow._start_output_scan（后台线程增量扫描
+        # 输出目录 + 写缓存，done 后无条件 reload），新图片立即可见。
+        refresh_btn = QPushButton(tr("刷新"))
+        refresh_btn.setObjectName("ghost")
+        refresh_btn.setToolTip(tr("重新扫描输出文件夹，立即显示新增图片（手动刷新）"))
+        refresh_btn.setCursor(Qt.PointingHandCursor)
+        refresh_btn.clicked.connect(self._on_refresh_clicked)
+        bar2.addWidget(refresh_btn)
+
+        a1111_btn = QPushButton(tr("从 A1111 导入"))
+        a1111_btn.setObjectName("ghost")
+        a1111_btn.setToolTip(tr("把 A1111 outputs 目录的生成图（含提示词参数）一键导入收藏"))
+        a1111_btn.setCursor(Qt.PointingHandCursor)
+        a1111_btn.clicked.connect(self._import_from_a1111)
+        bar2.addWidget(a1111_btn)
+
         bar2.addSpacing(6)
         bar2.addWidget(self._tool_label(tr("大小")))
         self.zoom = QSlider(Qt.Horizontal)
@@ -192,6 +311,8 @@ class GalleryPanel(QWidget):
         self.gallery.setUniformItemSizes(True)
         self.gallery.setSpacing(14)
         self.gallery.setWordWrap(True)
+        # v3.0：支持多选（Ctrl/Shift），右键批量操作
+        self.gallery.setSelectionMode(QListWidget.ExtendedSelection)
         self.gallery.setContextMenuPolicy(Qt.CustomContextMenu)
         self.gallery.customContextMenuRequested.connect(lambda pos: self._context_menu(pos, "grid"))
         self.gallery.itemDoubleClicked.connect(
@@ -333,6 +454,17 @@ class GalleryPanel(QWidget):
     # ================= 数据 =================
     def reload(self):
         self._records = list(self.store.records)
+        # v3.1+：合并 ComfyUI 输出文件夹虚拟记录（「我的作品」分组，不复制文件）
+        # 启动时只读磁盘缓存（秒级，不枚举目录，校验目录集合匹配）；
+        # 后台线程增量扫描后由 main_window 刷新
+        try:
+            from app.comfy_output import load_cached_records, configured_output_dirs
+            vout = load_cached_records(
+                str(self.store.root / "comfy_output_cache.json"),
+                configured_output_dirs(self.store))
+            self._records.extend(vout)
+        except Exception:
+            pass
         self._pm_cache.clear()
         types_present = {(r.get("base_model") or "其他") for r in self._records}
         cur_base = self.base_combo.currentText()
@@ -358,6 +490,18 @@ class GalleryPanel(QWidget):
         if cur_lora in loras:
             self.lora_combo.setCurrentText(cur_lora)
         self.lora_combo.blockSignals(False)
+
+        # v3.0：标签筛选下拉（从全部记录收集）
+        cur_tag = self.tag_combo.currentText()
+        tags = unique_tags(self._records)
+        self.tag_combo.blockSignals(True)
+        self.tag_combo.clear()
+        self.tag_combo.addItem(tr("全部标签"))
+        for t in tags:
+            self.tag_combo.addItem(t)
+        if cur_tag in [self.tag_combo.itemText(i) for i in range(self.tag_combo.count())]:
+            self.tag_combo.setCurrentText(cur_tag)
+        self.tag_combo.blockSignals(False)
         self._apply()
 
     def _filtered(self) -> list:
@@ -370,22 +514,42 @@ class GalleryPanel(QWidget):
             source=rev(self.source_combo.currentText()),
             search=self.search.text(),
             group=self._current_group,
+            media_type=self.media_combo.currentData(),
+            tag=self.tag_combo.currentText() if self.tag_combo.currentText() != tr("全部标签") else "全部",
         )
 
     def _apply(self):
         self._hide_popup()
+        # v3.5：每次 _apply 先停旧分片渲染（防堆积/交错）——筛选/排序/刷新/切页
+        # 触发的新渲染必须取消进行中的分片，避免旧定时器继续往新列表里加 item
+        self._cancel_chunk_render()
         records = self._sorted(self._filtered())
+        # 虚拟记录上限：Windows GDI 对象限制，一次渲染过多 QPixmap 会卡死/崩溃
+        VIRT_CAP = 250
+        virt = [r for r in records if r.get("is_virtual")]
+        real = [r for r in records if not r.get("is_virtual")]
+        capped = len(virt) > VIRT_CAP
+        if capped:
+            virt = virt[:VIRT_CAP]
+        records = real + virt
         size = self.zoom.value()
         n = len(records)
-        self.count_label.setText(tr_format("共 {n} 张", n=n))
+        if capped:
+            self.count_label.setText(
+                tr_format("共 {n} 张（虚拟作品仅显示前 {cap} 张）", n=n, cap=VIRT_CAP))
+        else:
+            self.count_label.setText(tr_format("共 {n} 张", n=n))
         if n == 0:
             self.gallery.clear()
             self.detail.clearContents()
             self.detail.setRowCount(0)
             self.stack.setCurrentIndex(2)
-            self.empty_label.setText(
-                "没有符合条件的图片\n" +
-                (tr("去「收藏作品」板块添加例图吧") if not self._records else tr("试试调整筛选/分组条件")))
+            if self._scanning:
+                self.empty_label.setText(tr("正在后台扫描输出文件夹…"))
+            else:
+                self.empty_label.setText(
+                    "没有符合条件的图片\n" +
+                    (tr("去「收藏作品」板块添加例图吧") if not self._records else tr("试试调整筛选/分组条件")))
             return
         if self._view_mode == "table":
             self.stack.setCurrentIndex(1)
@@ -395,20 +559,75 @@ class GalleryPanel(QWidget):
             self._fill_grid(records, size)
 
     def _fill_grid(self, records: list, size: int):
+        """平铺渲染。v3.5：大数据量改为分片渲染，窗口保持可交互。
+
+        旧实现：同步 for 循环为每个 item setIcon（真实窗口 250+ tile 的磁盘 IO +
+        GDI 绘制 → 几十秒卡死；offscreen 不绘制所以测不出）。新实现：
+        - 小数据集（<= GRID_CHUNK）：单批同步渲染（瞬间完成，零延迟）
+        - 大数据集：先清空 + 预填 _by_uid + 设尺寸，再启动分片定时器逐批添加
+          （每批 GRID_CHUNK 个，间隔 GRID_CHUNK_MS，批次间事件循环可滚动/点击）
+        """
+        self._cancel_chunk_render()
         self.gallery.clear()
         self._by_uid = {}
+        for r in records:
+            self._by_uid[r["id"]] = r
         grid = size + 26
         self.gallery.setIconSize(QSize(size - 6, size - 6))
         self.gallery.setGridSize(QSize(grid, grid + 22))
-        for r in records:
+        if len(records) <= GRID_CHUNK:
+            # 小数据集：同步单批渲染（保持既有行为/测试确定性）
+            self._render_grid_batch(records, size, 0, len(records))
+            return
+        self._chunk_records = records
+        self._chunk_size = size
+        self._chunk_pos = 0
+        self._chunk_timer.start(GRID_CHUNK_MS)
+
+    def _render_grid_batch(self, records: list, size: int, start: int, end: int):
+        """渲染 records[start:end] 的一批平铺 item（setIcon + setText + addItem）。
+
+        _by_uid 已在 _fill_grid 预填全部记录，本方法只创建列表项；
+        悬停/右键查询不依赖 item 是否已创建。
+        """
+        for r in records[start:end]:
             uid = r["id"]
-            self._by_uid[uid] = r
             li = QListWidgetItem()
             li.setData(Qt.UserRole, uid)
-            li.setText(r.get("title") or "")
+            is_video = (r.get("media_type") == "video")
+            title = r.get("title") or ""
+            li.setText(("▶ " if is_video else "") + title + self._missing_marker(r))
             li.setTextAlignment(Qt.AlignHCenter)
             li.setIcon(self._tile_pixmap(r, size - 6))
+            if is_video:
+                li.setToolTip(tr_format("视频：{t}", t=title or tr("视频")))
             self.gallery.addItem(li)
+
+    def _render_grid_chunk(self):
+        """分片定时器回调：渲染下一批；全部完成后停定时器、恢复状态。"""
+        records = self._chunk_records
+        if not records:
+            self._chunk_timer.stop()
+            return
+        size = self._chunk_size
+        end = min(self._chunk_pos + GRID_CHUNK, len(records))
+        self._render_grid_batch(records, size, self._chunk_pos, end)
+        self._chunk_pos = end
+        if self._chunk_pos >= len(records):
+            self._chunk_timer.stop()
+            self._chunk_records = None
+            self._chunk_size = 0
+            self._chunk_pos = 0
+
+    def _cancel_chunk_render(self):
+        """停止进行中的分片渲染并清空状态（_apply 开头调用，防堆积/交错）。"""
+        try:
+            self._chunk_timer.stop()
+        except RuntimeError:
+            pass
+        self._chunk_records = None
+        self._chunk_size = 0
+        self._chunk_pos = 0
 
     def _fill_table(self, records: list):
         self._by_uid = {}
@@ -425,7 +644,8 @@ class GalleryPanel(QWidget):
             thumb.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             self.detail.setItem(row, 0, thumb)
             # 标题
-            ti = QTableWidgetItem(r.get("title") or "")
+            is_video = (r.get("media_type") == "video")
+            ti = QTableWidgetItem(("▶ " if is_video else "") + (r.get("title") or "") + self._missing_marker(r))
             ti.setData(Qt.UserRole, uid)
             self.detail.setItem(row, 1, ti)
             # 主模型大类
@@ -483,10 +703,23 @@ class GalleryPanel(QWidget):
             return self._pm_cache[key]
         if r.get("thumb_file"):
             path = str(self.store.thumbs_dir / r["thumb_file"])
-            pm = rounded_pixmap(path, size)
+            pm = rounded_pixmap(path, size) if Path(path).exists() else _no_image_pixmap(size)
         elif r.get("image_file"):
             path = str(self.store.images_dir / r["image_file"])
-            pm = rounded_pixmap(path, size)
+            pm = rounded_pixmap(path, size) if Path(path).exists() else _no_image_pixmap(size)
+        elif r.get("is_virtual") and r.get("virtual_path"):
+            # 虚拟记录：用缩略图缓存（后台线程生成）；无缓存时显示占位图，避免读原图卡顿
+            try:
+                from app.comfy_output import thumb_path_for_rec
+                tp = thumb_path_for_rec(self.store, r)
+                if tp.exists() and tp.stat().st_size >= 100:
+                    pm = rounded_pixmap(str(tp), size)
+                else:
+                    pm = _no_image_pixmap(size)
+            except Exception:
+                pm = _no_image_pixmap(size)
+        elif r.get("virtual_path") and Path(r["virtual_path"]).exists():
+            pm = rounded_pixmap(str(r["virtual_path"]), size)
         else:
             pm = _no_image_pixmap(size)
         if len(self._pm_cache) > 500:   # 防止无限增长
@@ -505,6 +738,8 @@ class GalleryPanel(QWidget):
             pm = load_pixmap(str(self.store.thumbs_dir / r["thumb_file"]), 480)
         if (pm is None or pm.isNull()) and r.get("image_file"):
             pm = load_pixmap(str(self.store.images_dir / r["image_file"]), 480)
+        if (pm is None or pm.isNull()) and r.get("virtual_path"):
+            pm = load_pixmap(str(r["virtual_path"]), 480)
         if pm is None or pm.isNull():
             pm = _no_image_pixmap(120)
         # 预缩放为悬浮窗所需尺寸（380 内等比），show_image 直接 setPixmap 零开销
@@ -654,7 +889,204 @@ class GalleryPanel(QWidget):
             menu.addAction(tr("在浏览器打开来源链接"), lambda: self._open_source(rec))
         menu.addSeparator()
         menu.addAction(tr("删除记录"), lambda: self._delete(rec))
+
+        # v3.0：多选时的批量操作
+        sel = self._selected_records()
+        if len(sel) > 1:
+            menu.addSeparator()
+            bmenu = menu.addMenu(tr_format("批量操作（{n} 项）▸", n=len(sel)))
+            bmenu.addAction(tr("批量删除"), lambda: self._batch_delete(sel))
+            bmenu.addAction(tr("批量改分组 ▸"), lambda: self._batch_set_group(sel))
+            bmenu.addAction(tr("批量导出"), lambda: self._batch_export(sel))
         menu.exec(self.gallery.viewport().mapToGlobal(pos))
+
+    def _selected_records(self) -> list:
+        """当前网格多选的记录列表（去重保序）。"""
+        out = []
+        for li in self.gallery.selectedItems():
+            r = self._by_uid.get(li.data(Qt.UserRole))
+            if r and r not in out:
+                out.append(r)
+        return out
+
+    def _batch_delete(self, recs: list):
+        from PySide6.QtWidgets import QMessageBox
+        ret = QMessageBox.question(
+            self, tr("AI-Prompt-Vault"),
+            tr_format("确定删除选中的 {n} 条记录吗？\n图片/视频将移入资料库回收站（trash）。",
+                      n=len(recs)))
+        if ret != QMessageBox.Yes:
+            return
+        for r in recs:
+            self.store.remove(r["id"])
+        self.reload()
+
+    def _batch_set_group(self, recs: list):
+        from PySide6.QtWidgets import QInputDialog, QMessageBox
+        choices = [tr("未分组")] + list(self.store.groups)
+        g, ok = QInputDialog.getItem(self, tr("批量改分组"),
+                                     tr_format("将 {n} 条记录移动到：", n=len(recs)),
+                                     choices, 0, False)
+        if not ok:
+            return
+        group = "" if g == tr("未分组") else g
+        for r in recs:
+            self.store.set_record_group(r["id"], group)
+        self.reload()
+
+    def _batch_export(self, recs: list):
+        from app.export_util import export_records
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        from app.config import APP_NAME
+        d = QFileDialog.getExistingDirectory(self, tr("选择导出文件夹"))
+        if not d:
+            return
+        n, err = export_records(self.store, recs, d)
+        if n:
+            QMessageBox.information(self, tr(APP_NAME),
+                                    tr_format("已导出 {n} 条记录到：{d}", n=n, d=d))
+        else:
+            QMessageBox.warning(self, tr(APP_NAME), tr_format("导出失败：{err}", err=err or "?"))
+
+    def _import_from_a1111(self):
+        """从 A1111 outputs 目录一键导入生成图（后台线程，不卡 UI）。"""
+        from PySide6.QtCore import QThread, Signal as QtSignal
+        from PySide6.QtWidgets import QMessageBox
+        from app.config import APP_NAME
+
+        out_dir = self.store.load_setting("a1111_dir", "").strip()
+        if not out_dir:
+            QMessageBox.information(
+                self, tr(APP_NAME),
+                tr("请先在「设置」中配置 A1111 outputs 目录。"))
+            return
+
+        class _ImportThread(QThread):
+            done = QtSignal(int, int, int)   # imported, skipped, errors
+
+            def __init__(self, store, out_dir):
+                super().__init__()
+                self.store = store
+                self.out_dir = out_dir
+
+            def run(self):
+                from app.a1111 import import_from_outputs
+                imported, skipped, errors = import_from_outputs(self.store, self.out_dir)
+                self.done.emit(imported, skipped, errors)
+
+        btn = self.sender() if hasattr(self, "sender") else None
+        if btn is not None:
+            btn.setEnabled(False)
+        th = _ImportThread(self.store, out_dir)
+
+        def _on_done(imported, skipped, errors):
+            if btn is not None:
+                btn.setEnabled(True)
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self.reload())
+            if errors:
+                QMessageBox.warning(
+                    self, tr(APP_NAME),
+                    tr_format("导入完成：{imported} 张新增，{skipped} 张重复跳过，{errors} 张失败",
+                              imported=imported, skipped=skipped, errors=errors))
+            else:
+                QMessageBox.information(
+                    self, tr(APP_NAME),
+                    tr_format("已导入 {imported} 张，{skipped} 张重复跳过",
+                              imported=imported, skipped=skipped))
+
+        th.done.connect(_on_done)
+        th.finished.connect(th.deleteLater)
+        th.start()
+
+    def _find_duplicates(self):
+        """检测库中重复图片（感知哈希），列出重复组供选择删除。
+
+        v3.4：只对真实记录查重——虚拟记录（ComfyUI 输出引用，id 不在 store 里）
+        不参与查重清理，避免用户对虚拟记录点清理时静默失败。
+        """
+        from app.dupe_util import find_duplicate_groups
+        from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+                                       QListWidget, QListWidgetItem, QPushButton,
+                                       QMessageBox)
+        from app.config import APP_NAME
+        import time as _t
+
+        def thumb_of(r):
+            if r.get("thumb_file"):
+                p = self.store.thumbs_dir / r["thumb_file"]
+                if p.exists():
+                    return p
+            if r.get("image_file"):
+                p = self.store.images_dir / r["image_file"]
+                if p.exists():
+                    return p
+            return ""
+
+        records = self.real_records(self._records)   # 排除虚拟记录
+        groups = find_duplicate_groups(records, thumb_of)
+        if not groups:
+            QMessageBox.information(self, tr(APP_NAME), tr("未发现重复图片 ✓"))
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr_format("发现 {n} 组重复图片", n=len(groups)))
+        dlg.resize(520, 480)
+        lay = QVBoxLayout(dlg)
+        tip = QLabel(tr("以下图片哈希相同（同一张图的不同版本）。点击「清理」保留每组第一张，删除其余（移入回收站）。"))
+        tip.setObjectName("hint")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+        lst = QListWidget()
+        lst.setObjectName("dupeList")
+        for g in groups:
+            title = (g[0].get("title") or tr("未命名"))[:30]
+            item = QListWidgetItem(f"{title}  ·  {tr_format(' {n} 张重复', n=len(g))}")
+            item.setData(Qt.UserRole, [r["id"] for r in g])
+            lst.addItem(item)
+        lay.addWidget(lst, 1)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        close_btn = QPushButton(tr("关闭"))
+        close_btn.setObjectName("ghost")
+        close_btn.clicked.connect(dlg.accept)
+        btns.addWidget(close_btn)
+        clean_btn = QPushButton(tr("清理选中组"))
+        clean_btn.setObjectName("primary")
+        clean_btn.clicked.connect(lambda: self._cleanup_dupe_group(dlg, lst))
+        btns.addWidget(clean_btn)
+        lay.addLayout(btns)
+        dlg.exec()
+
+    @staticmethod
+    def real_records(records: list) -> list:
+        """过滤虚拟记录（ComfyUI 输出引用），只保留真实资料库记录。
+
+        v3.4：查重清理只应作用于真实记录；虚拟记录 id（vout:...）不在 store 中，
+        store.remove() 会静默返回 None。同时作为可测试的纯函数入口。
+        """
+        return [r for r in records if not r.get("is_virtual")]
+
+    def _cleanup_dupe_group(self, dlg, lst):
+        """清理选中的重复组：保留第一张，删除其余（进回收站）。"""
+        from PySide6.QtWidgets import QMessageBox
+        from app.config import APP_NAME
+        cur = lst.currentItem()
+        if not cur:
+            QMessageBox.information(self, tr(APP_NAME), tr("请先选择一组重复图片"))
+            return
+        ids = cur.data(Qt.UserRole)
+        removed = 0
+        for rid in ids[1:]:
+            # v3.4 防御：虚拟记录 id 不在 store 中，跳过（正常流程已过滤，此处兜底）
+            if str(rid).startswith("vout:") or str(rid).startswith("my_works"):
+                continue
+            if self.store.remove(rid):
+                removed += 1
+        QMessageBox.information(self, tr(APP_NAME),
+                                tr_format("已清理 {removed} 张重复图片（移入回收站）", removed=removed))
+        self.reload()
+        dlg.accept()
 
     def _set_group_of(self, rec, group: str):
         self.store.set_record_group(rec["id"], group)
@@ -745,10 +1177,24 @@ class GalleryPanel(QWidget):
             QToolTip.showText(QCursor.pos(), tr("请先选中一张图片"))
 
     def _open_detail(self, rec):
+        # 视频：双击直接用系统默认播放器打开（不走图片详情编辑）
+        if rec.get("media_type") == "video" and rec.get("video_file"):
+            from PySide6.QtGui import QDesktopServices
+            from PySide6.QtCore import QUrl
+            p = self.store.videos_dir / rec["video_file"]
+            if p.exists():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
+                return
         img_path = ""
         if rec.get("image_file"):
             img_path = str(self.store.images_dir / rec["image_file"])
+        elif rec.get("virtual_path") and Path(rec["virtual_path"]).exists():
+            img_path = str(rec["virtual_path"])
         dlg = DetailDialog(rec, img_path, self)
+        # 虚拟记录（ComfyUI output 引用）：只读，保存/删除无效化
+        if rec.get("is_virtual"):
+            dlg.setWindowTitle(tr("作品详情") + "  ·  " + tr("我的作品（虚拟引用，不复制文件）"))
+            dlg._readonly_virtual = True
         if dlg.exec():
             if dlg.record.get("_deleted"):
                 self.store.remove(rec["id"])

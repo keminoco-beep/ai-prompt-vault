@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from app.i18n import t as tr
+from app.i18n import t as tr, tr_format
 
 UA = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -373,12 +373,14 @@ def _widen_image_url(url: str, width: int = 0) -> str:
 
 
 def parse_image_page(html: str, img_id: int) -> dict:
-    """从单图页面提取 {meta, resources, width, height, url, title}。
+    """从单图/视频页面提取 {meta, resources, width, height, url, title, media_type, video_url}。
 
     resources 为 Civitai 服务端生成的完整模型清单（含 modelId/modelName/modelType/
     baseModel），是主模型大类与模型超链接的权威来源（与 meta 是否公开无关）。
+    支持视频页面：识别 type=video 对象，media_type=video，video_url 为视频文件地址。
     """
-    result = {"meta": None, "resources": [], "width": 0, "height": 0, "url": "", "title": ""}
+    result = {"meta": None, "resources": [], "width": 0, "height": 0,
+              "url": "", "title": "", "media_type": "image", "video_url": ""}
     m = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.S)
     if not m:
         return result
@@ -389,13 +391,16 @@ def parse_image_page(html: str, img_id: int) -> dict:
 
     meta_obj = None
     img_obj = None
+    vid_obj = None
     resources = []
 
     def walk(o):
-        nonlocal meta_obj, img_obj, resources
+        nonlocal meta_obj, img_obj, vid_obj, resources
         if isinstance(o, dict):
-            if o.get("type") == "image":
-                if img_obj is None and str(o.get("id")) == str(img_id):
+            otype = o.get("type")
+            oid = str(o.get("id"))
+            if otype == "image":
+                if img_obj is None and oid == str(img_id):
                     img_obj = o
                 # resources 可能存在于 id 为 None 的详情变体中，
                 # 单独按“含 modelId 的 resources”判断，并校验 imageId 归属
@@ -406,6 +411,15 @@ def parse_image_page(html: str, img_id: int) -> dict:
                     rid = o["resources"][0].get("imageId")
                     if rid is None or str(rid) == str(img_id):
                         resources = o["resources"]
+            elif otype == "video":
+                if vid_obj is None and oid == str(img_id):
+                    vid_obj = o
+                # 视频对象也可能携带 resources（模型清单）
+                if (not resources and isinstance(o.get("resources"), list)
+                        and o.get("resources")
+                        and isinstance(o["resources"][0], dict)
+                        and "modelId" in o["resources"][0]):
+                    resources = o["resources"]
             if meta_obj is None and isinstance(o.get("meta"), dict) and "prompt" in o.get("meta", {}):
                 meta_obj = o["meta"]
             for v in o.values():
@@ -415,15 +429,49 @@ def parse_image_page(html: str, img_id: int) -> dict:
                 walk(v)
 
     walk(data)
+    if vid_obj:
+        # 视频页面：media_type=video，width/height/title 来自视频对象
+        result["media_type"] = "video"
+        result["width"] = vid_obj.get("width") or 0
+        result["height"] = vid_obj.get("height") or 0
+        result["title"] = vid_obj.get("name") or ""
+        result["video_url"] = _extract_video_url(html, vid_obj)
+        # 视频页优先尝试封面图（无封面则留空，由导入端用首帧生成缩略图）
+        result["url"] = _extract_real_image_url(html, None)
+        if not result["url"] and img_obj:
+            result["url"] = _extract_real_image_url(html, img_obj)
     if img_obj:
-        result["width"] = img_obj.get("width") or 0
-        result["height"] = img_obj.get("height") or 0
-        result["title"] = img_obj.get("name") or ""
+        result["width"] = result["width"] or (img_obj.get("width") or 0)
+        result["height"] = result["height"] or (img_obj.get("height") or 0)
+        result["title"] = result["title"] or (img_obj.get("name") or "")
     if meta_obj:
         result["meta"] = meta_obj
     result["resources"] = resources
-    result["url"] = _extract_real_image_url(html, img_obj)
+    if not result["url"]:
+        result["url"] = _extract_real_image_url(html, img_obj)
     return result
+
+
+_VIDEO_EXTS = (".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi")
+
+
+def _extract_video_url(html: str, vid_obj: dict) -> str:
+    """从视频对象或页面 HTML 提取视频文件地址（mp4/webm/mov 等）。"""
+    # 1. 对象 url 字段若是完整 http 地址
+    u = (vid_obj or {}).get("url") or ""
+    if isinstance(u, str) and u.startswith("http"):
+        if u.lower().endswith(_VIDEO_EXTS) or "video" in u.lower():
+            return u.split("\\")[0]
+    # 2. 页面 HTML 中查找视频文件地址
+    norm = html.replace("\\/", "/")
+    for pat in (r"https://video\.civitai\.[^\"\s<]+",
+                r"https://image\.civitai\.(?:com|red)/[^\"\s<]+\.(?:mp4|webm|mov|m4v|mkv|avi)[^\"\s<]*"):
+        ms = re.findall(pat, norm)
+        for murl in ms:
+            if "/api/og" in murl:
+                continue
+            return murl.split("\\")[0]
+    return ""
 
 
 def _extract_real_image_url(html: str, img_obj: dict) -> str:
@@ -437,6 +485,11 @@ def _extract_real_image_url(html: str, img_obj: dict) -> str:
             guid = u  # 页面里 url 字段通常是文件 GUID
     cdn_pat = r"https://image\.civitai\.(?:com|red)/[^\"\s<]+"
     candidates = re.findall(cdn_pat, norm)
+    if not candidates:
+        return ""
+    # 排除视频文件地址（mp4/webm 等属于视频，不应作为图片返回）
+    candidates = [u for u in candidates
+                  if not u.lower().split("?")[0].endswith(_VIDEO_EXTS)]
     if not candidates:
         return ""
     if guid:
@@ -491,7 +544,13 @@ def fetch_image(id: int, timeout: float = 18.0, max_attempts: int = 2) -> dict:
                          "title": parsed["title"], "id": id,
                          "resources": parsed["resources"]},
                         f"https://civitai.com/images/{id}")
+                    # 视频页：透传 media_type / video_url
+                    rec["media_type"] = parsed["media_type"] or "image"
+                    rec["video_url"] = parsed["video_url"] or ""
                     meta = parsed["meta"] or {}
+                    if (parsed["media_type"] == "video"
+                            and (rec["video_url"] or parsed["url"] or meta.get("prompt"))):
+                        return rec  # 视频：只要有视频地址或提示词即可返回
                     if meta.get("prompt") or meta.get("negativePrompt") or meta.get("sampler") or meta.get("steps"):
                         return rec  # 完整 meta，直接返回
                     if best is None:
@@ -585,7 +644,7 @@ def download_image(url: str, dest: str, timeout: float = 30.0) -> tuple:
                     # 完整性校验：非空 + 可解码为图片
                     if Path(dest).stat().st_size > 0 and _is_valid_image(dest):
                         return True, ""
-                    last_err = "下载内容不是有效图片"
+                    last_err = tr("下载内容不是有效图片")
                     try:
                         Path(dest).unlink()
                     except Exception:
@@ -605,3 +664,41 @@ def _is_valid_image(path) -> bool:
         return not img.isNull()
     except Exception:
         return False
+
+
+def download_video(url: str, dest: str, timeout: float = 60.0) -> tuple:
+    """下载视频到 dest，返回 (ok, message)。先原地址，失败切换域名重试。"""
+    candidates = [url] if url else []
+    swapped = url.replace("video.civitai.com", "video.civitai.red") \
+                 .replace("video.civitai.red", "video.civitai.com")
+    if swapped != url and swapped not in candidates:
+        candidates.append(swapped)
+    last_err = tr("无视频地址")
+    for u in candidates:
+        try:
+            with requests.get(u, headers=UA, timeout=timeout, stream=True) as r:
+                ctype = (r.headers.get("content-type") or "").lower()
+                is_video_ct = (ctype.startswith("video")
+                               or ctype in ("application/octet-stream",
+                                            "application/binary", ""))
+                looks_video = Path(dest).suffix.lower() in (
+                    ".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi")
+                if r.status_code == 200 and is_video_ct and not (
+                        "text/html" in ctype or "text/plain" in ctype):
+                    with open(dest, "wb") as f:
+                        for chunk in r.iter_content(65536):
+                            f.write(chunk)
+                    # 完整性：非空 + 头部字节数合理（视频文件通常 > 8KB）
+                    size = Path(dest).stat().st_size
+                    if size > 8192 or looks_video and size > 0:
+                        return True, ""
+                    last_err = tr_format("视频内容异常（{size} 字节）", size=size)
+                    try:
+                        Path(dest).unlink()
+                    except Exception:
+                        pass
+                    continue
+                last_err = f"HTTP {r.status_code} ({ctype})"
+        except Exception as e:  # noqa: BLE001
+            last_err = type(e).__name__
+    return False, last_err

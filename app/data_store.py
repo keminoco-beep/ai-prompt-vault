@@ -27,6 +27,9 @@ def normalize_record(rec: dict) -> dict:
     rec.setdefault("base_model_raw", "")
     rec.setdefault("loras", [])
     rec.setdefault("group", "")   # 手动分组名，"" = 未分组
+    # v3.0：媒体类型（image | video），默认 image 兼容旧数据
+    rec.setdefault("media_type", "image")
+    rec.setdefault("video_file", "")   # 视频文件相对路径（videos/ 下）
 
     # 旧数据迁移：只有 model_name / model_type / loras，没有 models[] 时补齐
     models = rec.get("models") or []
@@ -71,42 +74,43 @@ def normalize_record(rec: dict) -> dict:
 
 
 class DataStore:
-    """负责资料库文件夹：images/  thumbs/  trash/  data.json"""
+    """负责资料库文件夹：images/  videos/  thumbs/  trash/  library.db
+
+    v3.0：records/groups 存 SQLite（旧 data.json 自动迁移并备份），
+    settings 仍存 settings.json（i18n/API Key 加密依赖）。对外 API 不变。
+    """
 
     def __init__(self, root: Path):
         self.root = Path(root)
         self.images_dir = self.root / "images"
+        self.videos_dir = self.root / "videos"
         self.thumbs_dir = self.root / "thumbs"
         self.trash_dir = self.root / "trash"
-        for d in (self.images_dir, self.thumbs_dir, self.trash_dir):
+        for d in (self.images_dir, self.videos_dir, self.thumbs_dir, self.trash_dir):
             d.mkdir(parents=True, exist_ok=True)
-        self.data_file = self.root / "data.json"
-        self._groups = []
+        self.data_file = self.root / "data.json"   # 旧 JSON（迁移源，保留）
+        self._storage = None
+        from app.storage import SqliteStore
+        self._storage = SqliteStore(self.root)
+        self._groups = self._storage.load_groups()
         self._records = self._load()
         self._seq = 0
 
     # ---------- 索引 ----------
     def _load(self) -> list:
-        if not self.data_file.exists():
-            return []
         try:
-            data = json.loads(self.data_file.read_text(encoding="utf-8"))
-            self._groups = [g for g in (data.get("groups") or []) if isinstance(g, str) and g.strip()]
-            recs = data.get("records", []) if isinstance(data, dict) else data
+            recs = self._storage.load_records()
             return [normalize_record(r) for r in recs if isinstance(r, dict)]
         except Exception:
-            # 索引损坏时备份后重建
-            try:
-                shutil.copy2(self.data_file, self.data_file.with_suffix(".bak.json"))
-            except Exception:
-                pass
             return []
 
     def save(self):
-        payload = {"version": 1, "groups": self._groups, "records": self._records}
-        tmp = self.data_file.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(self.data_file)
+        """全量写入 SQLite（records + groups 事务）。"""
+        try:
+            self._storage.save_records(self._records)
+            self._storage.save_groups(self._groups)
+        except Exception:
+            pass
 
     # ---------- 手动分组 ----------
     @property
@@ -118,7 +122,10 @@ class DataStore:
         if not name or name in self._groups:
             return False
         self._groups.append(name)
-        self.save()
+        try:
+            self._storage.save_groups(self._groups)
+        except Exception:
+            self.save()
         return True
 
     def rename_group(self, old: str, new: str) -> bool:
@@ -130,7 +137,11 @@ class DataStore:
         for r in self._records:
             if r.get("group") == old:
                 r["group"] = new
-        self.save()
+        try:
+            self._storage.save_groups(self._groups)
+            self._storage.save_records(self._records)
+        except Exception:
+            self.save()
         return True
 
     def remove_group(self, name: str) -> bool:
@@ -141,14 +152,21 @@ class DataStore:
         for r in self._records:
             if r.get("group") == name:
                 r["group"] = ""
-        self.save()
+        try:
+            self._storage.save_groups(self._groups)
+            self._storage.save_records(self._records)
+        except Exception:
+            self.save()
         return True
 
     def set_record_group(self, rid: str, group: str):
         rec = self.get(rid)
         if rec:
             rec["group"] = (group or "").strip()
-            self.save()
+            try:
+                self._storage.upsert_record(rec)
+            except Exception:
+                self.save()
 
     # ---------- 设置 ----------
     def settings_path(self) -> Path:
@@ -158,7 +176,11 @@ class DataStore:
         try:
             if self.settings_path().exists():
                 data = json.loads(self.settings_path().read_text(encoding="utf-8"))
-                return data.get(key, default)
+                val = data.get(key, default)
+                if key == "civitai_api_key" and isinstance(val, str):
+                    from app.crypto_util import unprotect
+                    return unprotect(val)
+                return val
         except Exception:
             pass
         return default
@@ -168,6 +190,9 @@ class DataStore:
             data = {}
             if self.settings_path().exists():
                 data = json.loads(self.settings_path().read_text(encoding="utf-8"))
+            if key == "civitai_api_key" and isinstance(value, str):
+                from app.crypto_util import protect
+                value = protect(value)
             data[key] = value
             self.settings_path().write_text(
                 json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -194,7 +219,11 @@ class DataStore:
         rec.setdefault("id", uuid.uuid4().hex[:12])
         rec.setdefault("created_at", time.strftime("%Y-%m-%d %H:%M:%S"))
         self._records.append(rec)
-        self.save()
+        # 增量写 SQLite（避免全量重写 O(n^2)）
+        try:
+            self._storage.upsert_record(rec)
+        except Exception:
+            self.save()
         return rec
 
     def update(self, rid: str, fields: dict) -> dict:
@@ -203,25 +232,36 @@ class DataStore:
             return None
         rec.update(normalize_record(fields))
         rec["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        self.save()
+        try:
+            self._storage.upsert_record(rec)
+        except Exception:
+            self.save()
         return rec
 
     def remove(self, rid: str) -> dict:
-        """软删除：图片/缩略图移入 trash/，记录移除。"""
+        """软删除：图片/缩略图/视频移入 trash/，记录移除。"""
         rec = self.get(rid)
         if not rec:
             return None
-        for key in ("image_file", "thumb_file"):
+        for key in ("image_file", "video_file", "thumb_file"):
             f = rec.get(key)
             if f:
-                src = self.images_dir / f if key == "image_file" else self.thumbs_dir / f
+                if key == "video_file":
+                    src = self.videos_dir / f
+                elif key == "thumb_file":
+                    src = self.thumbs_dir / f
+                else:
+                    src = self.images_dir / f
                 if src.exists():
                     try:
                         shutil.move(str(src), str(self.trash_dir / src.name))
                     except Exception:
                         pass
         self._records = [r for r in self._records if r["id"] != rid]
-        self.save()
+        try:
+            self._storage.remove_record(rid)
+        except Exception:
+            self.save()
         return rec
 
     def purge_trash(self):
@@ -246,6 +286,18 @@ class DataStore:
             ext = "png"
         name = self.next_image_name(ext)
         shutil.copy2(str(src), str(self.images_dir / name))
+        return name
+
+    def next_video_name(self, ext: str = "mp4") -> str:
+        self._seq += 1
+        return f"vid_{_ts()}_{self._seq:03d}.{ext.lstrip('.')}"
+
+    def copy_video_into(self, src: str) -> str:
+        """复制视频文件到 videos/，返回相对文件名（无扩展名白名单限制）。"""
+        src = Path(src)
+        ext = src.suffix.lower().lstrip(".") or "mp4"
+        name = self.next_video_name(ext)
+        shutil.copy2(str(src), str(self.videos_dir / name))
         return name
 
     # ---------- 打开文件夹 ----------

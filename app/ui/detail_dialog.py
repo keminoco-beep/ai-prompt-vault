@@ -39,11 +39,13 @@ class DetailDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
-        # 显式深色背景：QScrollArea 与内嵌 QWidget 默认浅色，需强制覆盖
+        # 显式背景：QScrollArea 与内嵌 QWidget 默认浅色，需强制覆盖（按主题）
+        from app.ui.style import tcolor
+        bg = tcolor("dialog_bg")
         self.setStyleSheet(
-            "QDialog { background-color: #16161f; color: #f2f2f8; }"
-            " QScrollArea { background: #16161f; border: none; }"
-            " QScrollArea > QWidget > QWidget { background: #16161f; }"
+            f"QDialog {{ background-color: {bg}; color: #f2f2f8; }}"
+            f" QScrollArea {{ background: {bg}; border: none; }}"
+            f" QScrollArea > QWidget > QWidget {{ background: {bg}; }}"
         )
 
         body = QHBoxLayout()
@@ -57,7 +59,8 @@ class DetailDialog(QDialog):
         self.img_label.setAlignment(Qt.AlignCenter)
         self.img_label.setMinimumSize(380, 380)
         self.img_label.setStyleSheet(
-            "background:#16161f; border:1px solid #26263a; border-radius:14px;")
+            f"background:{tcolor('dialog_bg')}; border:1px solid {tcolor('panel_border')};"
+            f" border-radius:14px;")
         self.img_label.setScaledContents(False)
         left.addWidget(self.img_label, 1)
         self.open_btn = QPushButton(tr("打开原图"))

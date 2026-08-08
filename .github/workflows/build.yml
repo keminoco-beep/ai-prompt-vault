@@ -25,6 +25,7 @@ jobs:
         run: |
           python tests/test_core.py
           python tests/test_image_meta.py
+          python tests/test_v32_langs.py
 
       - name: Build exe
         run: python build.py

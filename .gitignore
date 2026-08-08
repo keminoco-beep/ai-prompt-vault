@@ -1,33 +1,27 @@
-# ---- Python ----
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
 *.egg-info/
-*.egg
 
-# ---- Build artifacts ----
+# 构建/分发
 build/
 dist/
 *.spec
+APV_console.spec
 
-# ---- App data (user data, never commit) ----
-Library/
-资料库/
+# 工具/临时
+.workbuddy/
 backup/
-release/
-diag.log
-import.log
+ai-prompt-vault_new/
 
-# ---- Tests ----
-tests/shots/
-tests/.shots_old_*
-.*_old_*/
-
-# ---- IDE / OS ----
-.idea/
+# 编辑器
 .vscode/
-*.swp
+.idea/
+
+# 系统
 .DS_Store
 Thumbs.db
 
-# ---- WorkBuddy ----
-.workbuddy/
+# 测试/调试输出
+selftest.log

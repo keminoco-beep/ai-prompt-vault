@@ -18,9 +18,14 @@ class HoverPopup(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self.img_label = QLabel()
-        self.img_label.setStyleSheet(
-            "background:#0e0e16; border:1px solid #33334c; border-radius:12px;")
+        self.apply_theme_style()
         lay.addWidget(self.img_label)
+
+    def apply_theme_style(self):
+        from app.ui.style import tcolor
+        self.img_label.setStyleSheet(
+            f"background:{tcolor('img_bg')}; border:1px solid {tcolor('img_border')};"
+            f" border-radius:12px;")
 
     def show_image(self, pixmap: QPixmap, global_pos, screen_rect):
         """显示已缩放的图片（pixmap 由调用方缓存，避免磁盘 IO 与重复缩放卡顿）。"""

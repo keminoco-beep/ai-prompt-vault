@@ -170,7 +170,11 @@ def main():
     print("== 6. 设置对话框 ==")
     from app.ui.settings_dialog import SettingsDialog
     dlg = SettingsDialog(store, win)
-    check("设置回显 ComfyUI 路径", dlg.comfy_edit.text() == str(comfy_root))
+    # v3.3 解耦：设置页「输出文件夹」多选行只读 comfy_output_dirs；
+    # comfyui_dir 仅用于模型下载，不再回退迁移为输出目录列表。
+    # 未设置 comfy_output_dirs 时输出目录为空。
+    out_dirs = dlg._output_dirs
+    check("设置回显输出目录为空（comfyui_dir 不再回退）", out_dirs == [], f"({out_dirs})")
 
     print()
     failed = [r for r in RESULTS if not r[1]]

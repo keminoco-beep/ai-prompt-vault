@@ -1,6 +1,9 @@
+import logging
 from app.i18n import t as tr, tr_format
 """主窗口：侧边栏导航 + 分组区 + 收藏/浏览两个板块 + 全局粘贴快捷键。"""
 from PySide6.QtCore import Qt, QEvent, QTimer, QSize
+
+logger = logging.getLogger(__name__)
 from PySide6.QtGui import (QKeySequence, QShortcut, QDesktopServices, QPainter, QPixmap,
                            QColor, QFont, QBrush, QLinearGradient)
 from PySide6.QtCore import QRectF, QUrl
@@ -18,9 +21,15 @@ from app.filters import group_counts
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, store):
+    # 后台扫描输出文件夹的超时兜底（秒）。正常 4877 图首次扫描 ~4 分钟内完成
+    # （命中内存缓存秒级）；仅当扫描线程异常阻塞/死循环时触发强制清除「正在扫描」标记，
+    # 避免 UI 永远卡在「正在后台扫描输出文件夹…」。测试可用短值覆盖。
+    MAX_SCAN_SECONDS = 300
+
+    def __init__(self, store, output_scan: bool = True):
         super().__init__()
         self.store = store
+        self.output_scan = output_scan
         self.setWindowTitle(tr(APP_NAME))
         self.resize(1240, 780)
         self.setMinimumSize(1020, 640)
@@ -54,7 +63,8 @@ class MainWindow(QMainWindow):
         logo.setFixedSize(36, 36)
         logo.setAlignment(Qt.AlignCenter)
         logo.setText(tr("绘"))
-        logo.setStyleSheet("font-size:16px; font-weight:700; color:#fff;")
+        from app.ui.style import tcolor
+        logo.setStyleSheet(f"font-size:16px; font-weight:700; color:{tcolor('logo_color')};")
         brand.addWidget(logo)
         bt = QVBoxLayout()
         bt.setSpacing(0)
@@ -136,6 +146,8 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.collect_panel = CollectPanel(self.store)
         self.gallery_panel = GalleryPanel(self.store)
+        # v3.5：「刷新」按钮 → 后台扫描输出文件夹（增量扫描 + 写缓存 + done 后无条件 reload）
+        self.gallery_panel.refreshRequested.connect(self._start_output_scan)
         self.model_panel = ModelPanel(self.store)
 
         # 全局下载管理器（必须在 DownloadListPanel 之前创建）
@@ -165,15 +177,254 @@ class MainWindow(QMainWindow):
         # 启动徽标刷新
         self.download_manager.taskUpdated.connect(lambda *_: self._update_download_badge())
         self.download_manager.taskFinished.connect(lambda *_: self._update_download_badge())
+        # 后台扫描 ComfyUI output（首次全量解析慢，延迟到窗口就绪后；selftest 跳过）
+        from PySide6.QtCore import QTimer
+        self._scan_thread = None
+        self._thumb_thread = None
+        # 扫描超时兜底定时器（非重复）：_start_output_scan 启动，正常完成/强制清除时停止
+        self._scan_timeout = QTimer(self)
+        self._scan_timeout.setSingleShot(True)
+        self._scan_timeout.timeout.connect(self._force_clear_scanning)
+        if self.output_scan:
+            QTimer.singleShot(800, self._start_output_scan)
+
+    def closeEvent(self, event):
+        """关闭窗口时中断并等待后台扫描/缩略图线程结束（避免退出挂起）。
+
+        v3.4：线程 done 后 finished→deleteLater 会销毁 C++ 对象，此时引用仍指向
+        已删除对象，isRunning() 会抛 RuntimeError——用 try/except 防御，避免退出崩溃。
+        """
+        try:
+            self._scan_timeout.stop()
+        except Exception:
+            pass
+        for attr in ("_scan_thread", "_thumb_thread"):
+            th = getattr(self, attr, None)
+            if th is None:
+                continue
+            try:
+                if th.isRunning():
+                    th.requestInterruption()
+                    th.wait(5000)
+            except RuntimeError:
+                pass   # 线程已完成且 C++ 对象已 deleteLater 销毁
+            except Exception:
+                pass
+        super().closeEvent(event)
 
     def _open_settings(self):
         from app.ui.settings_dialog import SettingsDialog
-        SettingsDialog(self.store, self).exec()
+        dlg = SettingsDialog(self.store, self)
+        dlg.theme_changed.connect(self.apply_theme)
+        dlg.outputDirsChanged.connect(self._on_output_dirs_changed)
+        dlg.exec()
+
+    def _on_output_dirs_changed(self):
+        """设置保存后输出目录变化：立即刷新分组（秒级枚举）+ 图库（读缓存）+ 后台扫描写缓存。
+
+        v3.4 修复：之前只 refresh_groups + 后台扫描，图库页不刷新，
+        用户保存设置后图库看起来"没变化"。这里立即 reload 一次（读磁盘缓存，
+        有缓存秒级显示；无缓存先空，后续 _on_output_scanned / 切页 reload 兜底）。
+        v3.4.2 修复（缓存失配根因）：配置已变，旧磁盘/内存缓存必然失配（缓存 dirs
+        集合 != 新配置），主动删除磁盘缓存并清空进程内缓存——避免 scan_output_images
+        白加载 9.5MB 旧数据再丢弃全量重扫（用户实测 255s 卡顿）；删除后本次扫描
+        全新写入，refresh_groups 走 quick_group_counts 兜底（秒级枚举）。
+        """
+        # 1) 旧缓存必然失配：删除失配的磁盘缓存文件 + 清空内存缓存（旧 key 失效）。
+        #    invalidate_stale_cache 仅删「与当前配置失配」的缓存（真实配置变化时必然
+        #    失配），避免 scan 白加载 9.5MB 旧数据再丢弃重扫；有效缓存保留不误删。
+        try:
+            from app import comfy_output as _co
+            try:
+                _co.invalidate_stale_cache(
+                    str(self.store.root / "comfy_output_cache.json"),
+                    _co.configured_output_dirs(self.store))
+            except Exception:
+                pass
+            try:
+                _co._cache.clear()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        self.refresh_groups()
+        try:
+            self.gallery_panel.reload()
+        except Exception:
+            pass
+        self._start_output_scan()
+
+    def apply_theme(self, theme_name: str = None):
+        """主题切换：重设应用级 QSS + 刷新硬编码颜色控件（即时生效）。"""
+        from PySide6.QtWidgets import QApplication
+        from app.ui import style as st
+        t = theme_name or st.theme()
+        st.set_theme(t)
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(st.qss(t))
+        # 刷新硬编码颜色的控件
+        try:
+            self.collect_panel.drop.apply_theme_style()
+        except Exception:
+            pass
+        try:
+            self.gallery_panel._popup.apply_theme_style()
+        except Exception:
+            pass
+        try:
+            self.gallery_panel.sidebar._apply_theme_style()
+        except Exception:
+            pass
+        # logo 文字颜色
+        for lbl in self.findChildren(QLabel):
+            if lbl.objectName() == "logoDot":
+                from app.ui.style import tcolor
+                lbl.setStyleSheet(f"font-size:16px; font-weight:700; color:{tcolor('logo_color')};")
+                break
 
     def _on_page_changed(self, idx):
-        """切到模型管理页时重新扫描 ComfyUI（模型可能被外部改动）。"""
+        """切页时刷新：模型管理页重扫 ComfyUI；图库页重载虚拟记录（走缓存，秒级）。"""
         if idx == 2:
             self.model_panel.reload()
+        elif idx == 1:
+            try:
+                self.gallery_panel.reload()
+            except Exception:
+                pass
+
+    def _start_output_scan(self):
+        """后台线程扫描 ComfyUI 输出文件夹（首次全量解析较慢，不阻塞启动）。
+
+        v3.4：开始扫描时标记 gallery 空态提示「正在后台扫描输出文件夹…」。
+        v3.4.1 修复：快速重新选定输出目录时并发跑多个扫描线程、旧线程 done 干扰
+        新线程状态、扫描异常阻塞时状态永远不清除 —— 这里统一处理：
+          1) 启动前中断并等待旧扫描线程（最多 2 秒，超时硬覆盖，新线程照常启动）；
+          2) _on_output_scanned 做线程身份校验，旧线程 done 一律忽略；
+          3) set_scanning(True) 后启动非重复超时兜底定时器，异常阻塞时强制清除。
+        """
+        from PySide6.QtCore import QThread, Signal as QtSignal
+        from app.comfy_output import configured_output_dirs
+        dirs = configured_output_dirs(self.store)
+        if not dirs:
+            self._scan_timeout.stop()
+            self.gallery_panel.set_scanning(False)
+            return
+        cache_file = str(self.store.root / "comfy_output_cache.json")
+
+        # 1) 处理旧扫描线程：请求中断 + 最多等 2 秒；超时则硬覆盖（新线程照常启动）
+        old = self._scan_thread
+        if old is not None:
+            try:
+                if old.isRunning():
+                    old.requestInterruption()
+                    old.wait(2000)
+            except RuntimeError:
+                pass   # 线程已完成且 C++ 对象已 deleteLater 销毁
+            except Exception:
+                pass
+
+        self.gallery_panel.set_scanning(True)
+
+        class _ScanThread(QThread):
+            done = QtSignal()
+
+            def run(self):
+                try:
+                    from app.comfy_output import scan_output_images
+                    scan_output_images(dirs, cache_file,
+                                       cancel_cb=lambda: self.isInterruptionRequested())
+                except Exception:
+                    pass
+                self.done.emit()
+
+        th = _ScanThread(self)
+        th.done.connect(self._on_output_scanned)
+        th.finished.connect(th.deleteLater)
+        self._scan_thread = th
+        # 2) 超时保险：非重复定时器，异常阻塞/死循环时强制清除扫描标记；
+        #    正常完成（_on_output_scanned）或下次扫描前取消/重置。
+        self._scan_timeout.stop()
+        self._scan_timeout.start(int(getattr(self, "MAX_SCAN_SECONDS", 300)) * 1000)
+        th.start()
+
+    def _on_output_scanned(self):
+        """扫描完成：刷新分组树 + 图库（无条件 reload，读缓存秒级）+ 后台生成缩略图。
+
+        v3.4 修复：之前只在「图库当前可见」时才 reload——用户保存设置时在设置
+        对话框，扫描完成时当前页不是图库 → 图库不刷新。改为无条件 reload
+        （读磁盘缓存秒级不卡），并清除「扫描中」空态标记。
+        v3.4.1 修复：线程身份校验——旧扫描线程（已被新线程覆盖引用）的 done 信号
+        不再无条件清状态/刷新，避免干扰新扫描状态。直接调用（sender() 为 None，
+        如测试/内部同步调用）仍走原逻辑，向后兼容。
+        """
+        sender = self.sender()
+        if sender is not None and sender is not self._scan_thread:
+            return   # 旧扫描线程的完成信号：忽略
+        self._scan_timeout.stop()
+        self.gallery_panel.set_scanning(False)
+        self.refresh_groups()
+        try:
+            self.gallery_panel.reload()
+        except Exception:
+            pass
+        self._start_thumb_gen()
+
+    def _force_clear_scanning(self):
+        """扫描超时兜底：扫描线程异常阻塞/死循环时强制清除「正在扫描」标记。
+
+        正常扫描（含 4877 图首次全量解析）远快于 MAX_SCAN_SECONDS；仅当线程异常
+        卡住且 _on_output_scanned 永不触发时，此回调保证 UI 不会永远显示
+        「正在后台扫描输出文件夹…」，同时刷新一次图库（读缓存，秒级）。
+        """
+        self._scan_timeout.stop()
+        if self.gallery_panel._scanning:
+            logger.warning("后台扫描输出文件夹超时（>%s 秒），强制清除「扫描中」标记",
+                           int(getattr(self, "MAX_SCAN_SECONDS", 300)))
+            self.gallery_panel.set_scanning(False)
+            try:
+                self.gallery_panel.reload()
+            except Exception:
+                pass
+
+    def _start_thumb_gen(self):
+        """后台线程为虚拟记录生成缩略图缓存（每批 60 张刷新图库）。"""
+        from PySide6.QtCore import QThread, Signal as QtSignal
+        from app.comfy_output import configured_output_dirs
+        dirs = configured_output_dirs(self.store)
+        if not dirs:
+            return
+        try:
+            from app.comfy_output import thumb_dir_for
+            thumb_dir = thumb_dir_for(self.store)
+        except Exception:
+            return
+
+        class _ThumbThread(QThread):
+            progress = QtSignal(int, int)   # done, total
+
+            def run(self):
+                try:
+                    from app.comfy_output import generate_all_thumbs
+                    generate_all_thumbs(dirs, thumb_dir,
+                                        cancel_cb=lambda: self.isInterruptionRequested(),
+                                        batch_cb=lambda d, t: self.progress.emit(d, t))
+                except Exception:
+                    pass
+
+        th = _ThumbThread(self)
+        th.progress.connect(self._on_thumb_progress)
+        th.finished.connect(th.deleteLater)
+        self._thumb_thread = th
+        th.start()
+
+    def _on_thumb_progress(self, done, total):
+        """缩略图批量生成后刷新图库（仅当图库可见时）。"""
+        try:
+            if self.stack.currentWidget() is self.gallery_panel:
+                self.gallery_panel.reload()
+        except Exception:
+            pass
 
     def _show_download_page(self):
         # 下载页是独立面板（不占用 nav 高亮），直接切换
@@ -246,8 +497,25 @@ class MainWindow(QMainWindow):
 
     # ---------- 分组 ----------
     def refresh_groups(self):
-        """重建左侧分组树（全部/未分组/各自定义组 + 计数）。"""
+        """重建左侧分组树（全部/未分组/各自定义组 + 计数 + 「我的作品」虚拟组）。"""
         counts = group_counts(self.store.records)
+        # 「我的作品」：ComfyUI 输出文件夹虚拟分组（含子目录子组，多目录按文件夹分组）
+        # 优先读磁盘缓存（秒级，不枚举目录，且校验目录集合匹配）；无缓存/集合不匹配时
+        # 快速统计（只枚举文件，不解析 PNG 元数据），让分组立即可见；
+        # 元数据由后台线程扫描补全
+        vgroups = {}
+        vtotal = 0
+        try:
+            from app.comfy_output import (load_cached_groups, quick_group_counts,
+                                          GROUP_ROOT, configured_output_dirs)
+            dirs = configured_output_dirs(self.store)
+            cache_f = str(self.store.root / "comfy_output_cache.json")
+            vgroups = load_cached_groups(cache_f, dirs)
+            if not vgroups:
+                vgroups = quick_group_counts(dirs)
+            vtotal = sum(vgroups.values())
+        except Exception:
+            vgroups = {}
         self.group_tree.blockSignals(True)
         self.group_tree.clear()
         root = QTreeWidgetItem([tr("图片分组")])
@@ -255,7 +523,8 @@ class MainWindow(QMainWindow):
         self.group_tree.addTopLevelItem(root)
         items = {}
 
-        all_item = QTreeWidgetItem([f"{tr('全部图片')}（{len(self.store.records)}）"])
+        all_item = QTreeWidgetItem(
+            [f"{tr('全部图片')}（{len(self.store.records) + vtotal}）"])
         all_item.setData(0, Qt.UserRole, "全部")   # 固定 key，不随语言变化（筛选逻辑用）
         all_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
         root.addChild(all_item)
@@ -273,10 +542,52 @@ class MainWindow(QMainWindow):
             gi.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             root.addChild(gi)
             items[g] = gi
+
+        # 「我的作品」虚拟组（层级：父组 + 子目录/多目录子组）
+        if vgroups:
+            my_item = QTreeWidgetItem([f"{tr('我的作品')}（{vtotal}）"])
+            my_item.setData(0, Qt.UserRole, GROUP_ROOT)
+            my_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            root.addChild(my_item)
+            items[GROUP_ROOT] = my_item
+            self._build_virtual_tree(my_item, items, vgroups)
+            my_item.setExpanded(True)
         self._group_items = items
         root.setExpanded(self.collapse_btn.isChecked())
         self.group_tree.setCurrentItem(all_item)
         self.group_tree.blockSignals(False)
+
+    def _build_virtual_tree(self, my_item, items, vgroups):
+        """把 {group: count} 构造成「我的作品」下的层级树。
+
+        每个分组用完整 group key 作为点击筛选值（filter_records 按前缀匹配，
+        父组自动包含子组）；多目录时顶层即 my_works/<目录名>。
+        """
+        from app.comfy_output import GROUP_ROOT
+        root_node = {"count": 0, "children": {}}
+        subs = sorted({g for g in vgroups if g != GROUP_ROOT})
+        for g in subs:
+            segs = g[len(GROUP_ROOT) + 1:].split("/")
+            acc = vgroups.get(g, 0)
+            node = root_node
+            for seg in segs:
+                child = node["children"].setdefault(seg, {"count": 0, "children": {}})
+                child["count"] += acc
+                node = child
+
+        def add(parent_item, node, prefix):
+            for seg in sorted(node["children"]):
+                child = node["children"][seg]
+                key = f"{prefix}/{seg}" if prefix else seg
+                full = f"{GROUP_ROOT}/{key}"
+                ci = QTreeWidgetItem([f"{seg}（{child['count']}）"])
+                ci.setData(0, Qt.UserRole, full)
+                ci.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                parent_item.addChild(ci)
+                items[full] = ci
+                add(ci, child, key)
+
+        add(my_item, root_node, "")
 
     def _toggle_groups(self, checked: bool):
         self.collapse_btn.setText("▼" if checked else "▶")

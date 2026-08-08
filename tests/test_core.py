@@ -201,7 +201,8 @@ def test_store():
         st.remove(rec["id"])
         check("remove 移除记录", st.get(rec["id"]) is None)
         check("remove 移入回收站", (st.trash_dir / "img_a.png").exists())
-        check("索引文件存在", st.data_file.exists())
+        # v3.0：索引在 SQLite（library.db）；旧 data.json 不再生成
+        check("索引文件存在(SQLite)", st._storage.db_path.exists())
 
 
 if __name__ == "__main__":

@@ -15,6 +15,17 @@ def record_model_names(rec: dict) -> list:
     return names
 
 
+def unique_tags(records: list) -> list:
+    """记录中的所有标签（去重保序），用于标签筛选下拉。"""
+    seen, out = set(), []
+    for r in records:
+        for t in (r.get("tags") or []):
+            if t and t not in seen:
+                seen.add(t)
+                out.append(t)
+    return out
+
+
 def ratio_bucket(w: int, h: int) -> str:
     if not w or not h:
         return "其他"
@@ -79,7 +90,8 @@ def merge_loras(existing: list, positive_prompt: str) -> list:
 
 def filter_records(records: list, base_model: str = "全部", ratio: str = "全部比例",
                    lora: str = "全部", source: str = "全部", search: str = "",
-                   group: str = "全部") -> list:
+                   group: str = "全部", media_type: str = "全部",
+                   tag: str = "全部") -> list:
     """筛选记录。
 
     base_model: 主模型大类（如 Krea 2 / Flux.1 / Flux.2 / SDXL …），对应记录 base_model。
@@ -93,7 +105,13 @@ def filter_records(records: list, base_model: str = "全部", ratio: str = "全�
     ratio_all = ratio in ("全部", "全部比例")
     lora_all = lora in ("全部",)
     source_all = source in ("全部", "全部来源")
+    media_all = media_type in ("全部", "全部媒体", "")
+    tag_all = tag in ("全部", "全部标签", "")
     for r in records:
+        if not media_all and (r.get("media_type") or "image") != media_type:
+            continue
+        if not tag_all and tag not in (r.get("tags") or []):
+            continue
         if not base_all and (r.get("base_model") or "其他") != base_model:
             continue
         if not ratio_all and ratio_bucket(r.get("width"), r.get("height")) != ratio:
@@ -112,7 +130,7 @@ def filter_records(records: list, base_model: str = "全部", ratio: str = "全�
             if group == "未分组":
                 if rg:
                     continue
-            elif rg != group:
+            elif rg != group and not rg.startswith(group + "/"):
                 continue
         if search:
             hay = " ".join([

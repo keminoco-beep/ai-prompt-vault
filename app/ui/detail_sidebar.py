@@ -31,19 +31,32 @@ class DetailSidebar(QWidget):
         super().__init__(parent)
         self.store = store
         self._record = None
+        self.scroll = None
+        self.img_label = None
         self.setMinimumWidth(280)
         self.setMaximumWidth(440)
         self._build()
+
+    def _apply_theme_style(self):
+        """按当前主题刷新硬编码颜色（主题切换时调用）。"""
+        from app.ui.style import tcolor
+        bg = tcolor("panel_bg")
+        self.setStyleSheet(
+            f"QWidget#detailSidebar {{ background-color: {bg}; color: #ececf6; }}"
+            f" QWidget#detailSidebar QScrollArea {{ background: {bg}; border: none; }}"
+            f" QWidget#detailSidebar QScrollArea > QWidget > QWidget {{ background: {bg}; }}"
+        )
+        if self.scroll:
+            self.scroll.setStyleSheet(f"QScrollArea {{ background: {bg}; border: none; }}")
+        if self.img_label:
+            self.img_label.setStyleSheet(
+                f"background:{tcolor('img_bg')}; border:1px solid {tcolor('img_border')};"
+                f" border-radius:10px; color:{tcolor('img_placeholder')};")
 
     def _build(self):
         # 深色背景（仅作用于本组件容器，避免 QWidget 通配覆盖按钮/输入框的全局样式，
         # 否则按钮会失去 hover/pressed 反馈）
         self.setObjectName("detailSidebar")
-        self.setStyleSheet(
-            "QWidget#detailSidebar { background-color: #16161f; color: #ececf6; }"
-            " QWidget#detailSidebar QScrollArea { background: #16161f; border: none; }"
-            " QWidget#detailSidebar QScrollArea > QWidget > QWidget { background: #16161f; }"
-        )
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -52,7 +65,7 @@ class DetailSidebar(QWidget):
         scroll.setObjectName("detailScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: #16161f; border: none; }")
+        self.scroll = scroll
         outer.addWidget(scroll)
 
         inner = QWidget()
@@ -65,10 +78,9 @@ class DetailSidebar(QWidget):
         self.img_label = QLabel()
         self.img_label.setAlignment(Qt.AlignCenter)
         self.img_label.setFixedHeight(160)
-        self.img_label.setStyleSheet(
-            "background:#0e0e16; border:1px solid #33334c; border-radius:10px; color:#6d6d8a;")
         self.img_label.setText(tr("选择图片查看详情"))
         self.lay.addWidget(self.img_label)
+        self._apply_theme_style()
 
         self.title_label = QLabel(tr("(未选中)"))
         self.title_label.setObjectName("popupTitle")
@@ -198,6 +210,8 @@ class DetailSidebar(QWidget):
             pm = load_pixmap(str(self.store.thumbs_dir / rec["thumb_file"]), 360)
         if (pm is None or pm.isNull()) and rec.get("image_file"):
             pm = load_pixmap(str(self.store.images_dir / rec["image_file"]), 360)
+        if (pm is None or pm.isNull()) and rec.get("virtual_path"):
+            pm = load_pixmap(str(rec["virtual_path"]), 360)
         if pm and not pm.isNull():
             scaled = pm.scaled(360, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.img_label.setPixmap(scaled)

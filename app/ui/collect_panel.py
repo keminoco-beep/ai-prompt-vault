@@ -40,25 +40,30 @@ def _placeholder_pixmap(size: int) -> QPixmap:
 class DropZone(QFrame):
     dropped = Signal(object)
 
+    def apply_theme_style(self):
+        """按当前主题设置拖放区样式（主题切换时调用刷新）。"""
+        from app.ui.style import tcolor
+        self.setStyleSheet(f"""
+            QFrame#dropZone {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {tcolor("drop_bg_a")}, stop:1 {tcolor("drop_bg_b")});
+                border: 2px dashed {tcolor("drop_border")}; border-radius: 14px;
+            }}
+            QFrame#dropZone[active="true"] {{
+                border: 2px dashed {tcolor("drop_active_border")};
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {tcolor("drop_active_bg_a")}, stop:1 {tcolor("drop_active_bg_b")});
+            }}
+            QLabel#dzText {{ color: {tcolor("drop_text")}; font-size: 15px; }}
+            QLabel#dzSub {{ color: {tcolor("drop_sub")}; font-size: 12px; }}
+        """)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setMinimumHeight(150)
         self.setObjectName("dropZone")
-        self.setStyleSheet("""
-            QFrame#dropZone {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #1c1c2c, stop:1 #191928);
-                border: 2px dashed #33334c; border-radius: 14px;
-            }
-            QFrame#dropZone[active="true"] {
-                border: 2px dashed #6d5ef0;
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #262242, stop:1 #1f1f38);
-            }
-            QLabel#dzText { color: #b9b9cd; font-size: 15px; }
-            QLabel#dzSub { color: #7d7d95; font-size: 12px; }
-        """)
+        self.apply_theme_style()
         lay = QVBoxLayout(self)
         lay.setSpacing(4)
         self.text = QLabel(PLACEHOLDER_TEXT)
@@ -106,6 +111,7 @@ class CollectPanel(QWidget):
         super().__init__(parent)
         self.store = store
         self.pool = QThreadPool.globalInstance()
+        self.pool.setMaxThreadCount(2)  # 导入并发上限 2（视频首帧提取较吃 CPU）
         # 当前所有 pending 项的导入看门狗（uid -> QTimer）
         self._watchdogs = {}
         self.pending = {}      # uid -> item dict
@@ -304,7 +310,9 @@ class CollectPanel(QWidget):
     # ================= 工具 =================
     def _status(self, text: str, ok: bool = True):
         self.status_label.setText(text)
-        self.status_label.setStyleSheet("color: #8bd68b;" if ok else "color: #ff9aa5;")
+        from app.ui.style import tcolor
+        self.status_label.setStyleSheet(
+            f"color: {tcolor('status_ok')};" if ok else f"color: {tcolor('status_fail')};")
 
     def _copy_text(self, text: str):
         if not text:
@@ -455,16 +463,29 @@ class CollectPanel(QWidget):
 
     def _update_item_visual(self, li, item: dict):
         pm = None
-        if item["image_file"]:
+        if item.get("video_file"):
+            # 视频项：用首帧缩略图，加 ▶ 标记
+            t = item.get("thumb_file")
+            if t:
+                pm = load_pixmap(str(self.store.thumbs_dir / t), 320)
+            if pm and not pm.isNull():
+                li.setIcon(rounded_pixmap(str(self.store.thumbs_dir / t), 84))
+            else:
+                li.setIcon(_placeholder_pixmap(84))
+        elif item["image_file"]:
             pm = load_pixmap(str(self.store.images_dir / item["image_file"]), 320)
-        if pm and not pm.isNull():
-            li.setIcon(rounded_pixmap(str(self.store.images_dir / item["image_file"]), 84))
+            if pm and not pm.isNull():
+                li.setIcon(rounded_pixmap(str(self.store.images_dir / item["image_file"]), 84))
+            else:
+                li.setIcon(_placeholder_pixmap(84))
         else:
             li.setIcon(_placeholder_pixmap(84))
         if item["state"] == "importing":
             li.setText(tr("导入中…"))
         elif item["record"].get("title"):
             li.setText(item["record"]["title"][:8])
+        elif item.get("video_file"):
+            li.setText("▶")
         else:
             li.setText(tr("待保存"))
 
@@ -574,12 +595,28 @@ class CollectPanel(QWidget):
         self._status(tr("已加入待保存"))
 
     def _start_local_copy(self, path: str):
+        # 视频文件走视频导入链路（复制到 videos/ + 首帧缩略图）
+        from app.video_meta import is_video_path
+        if is_video_path(path):
+            self._start_local_video(path)
+            return
         from app.workers import copy_local_file
         uid = uuid.uuid4().hex[:8]
         fields = {"source": "local", "source_url": ""}
         self.pending[uid] = {"uid": uid, "record": fields, "image_file": None, "state": "importing"}
         self._add_pending_item(self.pending[uid])
         self._run_task(uid, copy_local_file, self.store, path, timeout_sec=30)
+
+    def _start_local_video(self, path: str):
+        """导入本地视频：后台复制 + 首帧缩略图，不阻塞 UI。"""
+        from app.workers import import_local_video
+        uid = uuid.uuid4().hex[:8]
+        fields = {"source": "local", "source_url": "", "media_type": "video"}
+        self.pending[uid] = {"uid": uid, "record": fields,
+                             "image_file": None, "state": "importing"}
+        self._add_pending_item(self.pending[uid])
+        self._select_uid(uid)
+        self._run_task(uid, import_local_video, self.store, path, timeout_sec=120)
 
     def _start_web_download(self, url: str):
         from app.workers import download_web_image
@@ -669,6 +706,13 @@ class CollectPanel(QWidget):
             # 本地图片自带生成参数时自动填充（不提前 return，保证 visual 一定更新）
             if not item["record"].get("source_url") or not is_import:
                 auto_filled = self._fill_from_image_meta(uid)
+        if res.get("video_file"):
+            # 视频导入结果：media_type=video + 首帧缩略图 + 时长
+            item["video_file"] = res["video_file"]
+            item["record"]["media_type"] = "video"
+            item["thumb_file"] = res.get("thumb_file") or ""
+            if res.get("duration"):
+                item["record"]["duration"] = res["duration"]
         self._update_item_visual(self._li_of(uid), item)
         if self._li_of(uid) == self.pending_list.currentItem():
             self._apply_form(item)
@@ -688,6 +732,14 @@ class CollectPanel(QWidget):
                     str(self.store.images_dir / res["image_file"]))
         if res.get("image_file"):
             item["image_file"] = res["image_file"]
+        if res.get("video_file"):
+            # Civitai 视频：media_type=video + 首帧缩略图 + 时长
+            item["video_file"] = res["video_file"]
+            item["record"]["media_type"] = "video"
+            if res.get("thumb_file"):
+                item["thumb_file"] = res["thumb_file"]
+            if res.get("duration"):
+                item["record"]["duration"] = res["duration"]
         err = res.get("error") or ""
         if err:
             self._status(err, ok=False)
@@ -737,14 +789,20 @@ class CollectPanel(QWidget):
             "source_url": r.get("source_url") or "",
             "image_file": item.get("image_file") or "",
             "thumb_file": "",
+            "media_type": r.get("media_type") or "image",
+            "video_file": item.get("video_file") or "",
         }
-        if rec["image_file"]:
+        if rec["media_type"] == "video" and rec["video_file"]:
+            # 视频：缩略图来自首帧提取（导入时生成），无则占位
+            rec["thumb_file"] = item.get("thumb_file") or ""
+            rec["duration"] = r.get("duration") or 0
+        elif rec["image_file"]:
             src = str(self.store.images_dir / rec["image_file"])
             tname = rec["image_file"].rsplit(".", 1)[0] + ".png"
             if make_thumbnail(src, str(self.store.thumbs_dir / tname), 400):
                 rec["thumb_file"] = tname
         if not rec["title"]:
-            rec["title"] = rec["image_file"] or "未命名"
+            rec["title"] = rec["video_file"] or rec["image_file"] or "未命名"
         return rec
 
     def save_current(self):
@@ -756,7 +814,7 @@ class CollectPanel(QWidget):
         item = self.pending.get(uid)
         if not item:
             return
-        if not item["image_file"] and not item["record"].get("source_url"):
+        if not item["image_file"] and not item.get("video_file") and not item["record"].get("source_url"):
             self._status(tr("这条还没有图片，无法保存"), ok=False)
             return
         rec = self._build_record(item)
@@ -772,7 +830,7 @@ class CollectPanel(QWidget):
         n = 0
         for uid in list(self.pending.keys()):
             item = self.pending[uid]
-            if not item["image_file"] and not item["record"].get("source_url"):
+            if not item["image_file"] and not item.get("video_file") and not item["record"].get("source_url"):
                 continue
             rec = self._build_record(item)
             self.store.add(rec)

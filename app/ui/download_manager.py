@@ -187,10 +187,10 @@ class DownloadManager(QObject):
                                     tr_format("模型「{name}」已存在，跳过下载。", name=name))
             return ""
 
-        # 创建任务
+        # 创建任务（进入等待队列，由 _pump 按并发上限启动）
         task_id = uuid.uuid4().hex[:12]
         task = DownloadTask(task_id, name, url, mtype, dest_dir)
-        task.status = DownloadTask.STATUS_DOWNLOADING
+        task.status = DownloadTask.STATUS_PENDING
         task.thread = DownloadThread(url, dest, self)
         task.thread.api_key = api_key
         task.thread.progress.connect(lambda g, t, s, tid=task_id: self._on_progress(tid, g, t, s))
@@ -202,8 +202,23 @@ class DownloadManager(QObject):
         if src_pos:
             self.flyRequested.emit(int(src_pos.x()), int(src_pos.y()))
 
-        task.thread.start()
+        self._pump()
         return task_id
+
+    MAX_ACTIVE = 3  # 同时下载上限（避免带宽/磁盘争抢）
+
+    def _pump(self):
+        """按并发上限启动等待中的任务。"""
+        running = sum(1 for t in self.tasks.values()
+                      if t.status == DownloadTask.STATUS_DOWNLOADING)
+        for t in list(self.tasks.values()):
+            if running >= self.MAX_ACTIVE:
+                break
+            if t.status == DownloadTask.STATUS_PENDING:
+                t.status = DownloadTask.STATUS_DOWNLOADING
+                t.thread.start()
+                self.taskUpdated.emit(t.id)
+                running += 1
 
     def _on_progress(self, task_id, got, total, speed):
         t = self.tasks.get(task_id)
@@ -230,6 +245,7 @@ class DownloadManager(QObject):
             # 暂停：保留 .part，任务停留在活动列表（可恢复）
             t.status = DownloadTask.STATUS_PAUSED
             self.taskUpdated.emit(task_id)
+            self._pump()   # 释放并发名额给下一个等待任务
             return
         t.status = DownloadTask.STATUS_DONE if ok else (
             DownloadTask.STATUS_CANCELLED if "已取消" in msg else DownloadTask.STATUS_FAILED)
@@ -248,6 +264,8 @@ class DownloadManager(QObject):
             if not getattr(self, "_guide_shown", False):
                 self._guide_shown = True
                 self._show_apikey_guide(t)
+        # 释放并发名额，启动下一个等待任务
+        self._pump()
 
     def _show_apikey_guide(self, task):
         """下载失败（疑似缺 API Key）时弹引导窗：去设置 / 打开 Civitai / 取消。"""

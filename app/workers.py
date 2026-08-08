@@ -88,6 +88,25 @@ def import_civitai(store, link: str) -> dict:
 
     image_file = None
     error = ""
+    # ---- 视频：下载视频文件 + 首帧缩略图 + 时长（不走图片下载） ----
+    if fields.get("media_type") == "video":
+        url = fields.get("video_url") or ""
+        if not url:
+            url = fields.get("image_url") or ""
+        vres = download_web_video(store, url)
+        if vres.get("video_file"):
+            fields["video_file"] = vres["video_file"]
+            fields["thumb_file"] = vres["thumb_file"]
+            fields["duration"] = vres["duration"]
+            return {"fields": fields, "image_file": None,
+                    "video_file": vres["video_file"],
+                    "thumb_file": vres["thumb_file"],
+                    "error": vres["error"]}
+        error = vres["error"] or tr("视频下载失败")
+        _log_import_error(store, link, error)
+        return {"fields": fields, "image_file": None, "video_file": None,
+                "thumb_file": "", "error": error}
+
     url = fields.get("image_url") or ""
     if url:
         ext = "jpg"
@@ -101,7 +120,8 @@ def import_civitai(store, link: str) -> dict:
         else:
             error = tr_format("图片下载失败（{err}）", err=err)
             _log_import_error(store, link, error)
-    return {"fields": fields, "image_file": image_file, "error": error}
+    return {"fields": fields, "image_file": image_file, "video_file": None,
+            "thumb_file": "", "error": error}
 
 
 def download_web_image(store, url: str) -> dict:
@@ -116,9 +136,73 @@ def download_web_image(store, url: str) -> dict:
     return {"image_file": name, "error": ""}
 
 
+def download_web_video(store, url: str) -> dict:
+    """下载 Civitai 视频到 videos/ + 提取首帧缩略图 + 时长。
+
+    返回 {video_file, thumb_file, duration, error}。
+    """
+    from pathlib import Path
+    from app.video_meta import extract_first_frame, video_duration
+    if not url:
+        return {"video_file": None, "thumb_file": "", "duration": 0,
+                "error": tr("视频地址为空")}
+    ext = "mp4"
+    m = re.search(r"\.(mp4|webm|mov|m4v|mkv|avi)(?:$|[?/])", url, re.I)
+    if m:
+        ext = m.group(1).lower()
+    name = store.next_video_name(ext)
+    ok, err = civitai.download_video(url, str(store.videos_dir / name))
+    if not ok:
+        return {"video_file": None, "thumb_file": "", "duration": 0,
+                "error": tr_format("视频下载失败（{err}）", err=err)}
+    thumb_name = Path(name).stem + ".png"
+    ok_frame = extract_first_frame(str(store.videos_dir / name),
+                                   str(store.thumbs_dir / thumb_name))
+    duration = 0
+    try:
+        duration = video_duration(str(store.videos_dir / name))
+    except Exception:
+        pass
+    return {"video_file": name,
+            "thumb_file": thumb_name if ok_frame else "",
+            "duration": duration or 0,
+            "error": ""}
+
+
 def copy_local_file(store, path: str) -> dict:
     try:
         name = store.copy_file_into(path)
         return {"image_file": name, "error": ""}
     except Exception as e:  # noqa: BLE001
         return {"image_file": None, "error": tr_format("复制文件失败（{e}）", e=e)}
+
+
+def import_local_video(store, path: str) -> dict:
+    """导入本地视频：复制到 videos/ + 提取首帧缩略图。
+
+    返回 {video_file, thumb_file, duration, error}。首帧提取失败不阻塞导入
+    （缩略图缺失时 UI 显示视频占位图）。
+    """
+    from pathlib import Path
+    from app.video_meta import extract_first_frame, video_duration, is_video_path
+    src = Path(path)
+    if not src.is_file() or not is_video_path(src):
+        return {"video_file": None, "error": tr("不是受支持的视频文件")}
+    try:
+        video_name = store.copy_video_into(str(src))
+        # 提取首帧缩略图
+        thumb_name = Path(video_name).stem + ".png"
+        thumb_path = store.thumbs_dir / thumb_name
+        duration = 0.0
+        ok_frame = extract_first_frame(str(store.videos_dir / video_name),
+                                       str(thumb_path))
+        if ok_frame:
+            duration = video_duration(str(store.videos_dir / video_name))
+        return {
+            "video_file": video_name,
+            "thumb_file": thumb_name if ok_frame else "",
+            "duration": duration,
+            "error": "",
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"video_file": None, "error": tr_format("复制文件失败（{e}）", e=e)}
