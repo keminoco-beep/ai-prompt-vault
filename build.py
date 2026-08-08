@@ -17,21 +17,6 @@ APP_NAME = "AI绘图资料整理"
 ICON = ROOT / "app.ico"
 MAIN = ROOT / "main.py"
 
-# 排除未用到的 Qt 模块，显著减小体积（不影响功能，仅影响最终大小）
-EXCLUDE = [
-    "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtWebEngineCore",
-    "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore", "PySide6.QtCharts",
-    "PySide6.QtDataVisualization", "PySide6.QtGraphs", "PySide6.QtHttpServer",
-    "PySide6.QtPdf", "PySide6.QtPdfWidgets", "PySide6.QtPositioning",
-    "PySide6.QtLocation", "PySide6.QtRemoteObjects", "PySide6.QtScxml",
-    "PySide6.QtSensors", "PySide6.QtSerialPort", "PySide6.QtSql",
-    "PySide6.QtStateMachine", "PySide6.QtTest", "PySide6.QtWebChannel",
-    "PySide6.QtWebSockets", "PySide6.QtBluetooth", "PySide6.QtNfc",
-    "PySide6.QtMultimediaWidgetsQuick", "PySide6.QtQuick3D",
-    "PySide6.QtQuickControls2", "PySide6.QtQuickWidgets", "PySide6.QtDesigner",
-    "PySide6.QtHelp", "PySide6.QtLabs*",
-]
-
 
 def py_bin() -> str:
     return sys.executable
@@ -58,8 +43,6 @@ def main() -> int:
 
     cmd = [py_bin(), "-m", "PyInstaller", "--noconfirm", "--onefile", "--windowed",
            "--name", APP_NAME, f"--icon={ICON}"]
-    for mod in EXCLUDE:
-        cmd.append(f"--exclude-module={mod}")
     # include OpenSSL DLLs if present (required by requests on some runtimes)
     for dll in ("libssl-3-x64.dll", "libcrypto-3-x64.dll"):
         p = find_dll(dll)

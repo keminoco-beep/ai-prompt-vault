@@ -80,7 +80,10 @@ Library/
 
 ## 🖼️ 截图 / Screenshots
 
-![screenshot](docs/screenshot.png)
+| | |
+|---|---|
+| ![Collect](docs/screenshots/main_collect.png) | ![Gallery](docs/screenshots/gallery.png) |
+| ![Models](docs/screenshots/models.png) | |
 
 ---
 
