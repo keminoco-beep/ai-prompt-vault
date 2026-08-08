@@ -32,6 +32,12 @@ def find_dll(name: str) -> Path:
 
 
 def main() -> int:
+    # CI/控制台可能是 cp1252/GBK 编码，强制 UTF-8（否则 print 中文 exe 名崩 UnicodeEncodeError）
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     if os.name != "nt":
         print("Note: on non-Windows platforms PyInstaller still builds, "
               "but the exe is intended for Windows.")
