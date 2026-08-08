@@ -22,7 +22,11 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: Run unit tests
+        shell: pwsh
         run: |
+          $env:PYTHONIOENCODING = 'utf-8'
+          $env:PYTHONUTF8 = '1'
+          $env:QT_QPA_PLATFORM = 'offscreen'
           python tests/test_core.py
           python tests/test_image_meta.py
           python tests/test_v32_langs.py
@@ -31,7 +35,10 @@ jobs:
         run: python build.py
 
       - name: Smoke test exe
-        run: dist\AI绘图资料整理.exe --selftest
+        shell: pwsh
+        run: |
+          $env:PYTHONIOENCODING = 'utf-8'
+          dist\AI绘图资料整理.exe --selftest
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
