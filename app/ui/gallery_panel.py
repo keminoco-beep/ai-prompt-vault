@@ -1,18 +1,19 @@
 from app.i18n import t as tr, rev, tr_format
 """浏览面板：平铺大图 / 详细信息列表两种显示模式，排序、筛选、悬浮详情、复制、分组。"""
+from collections import OrderedDict
 from pathlib import Path
-from PySide6.QtCore import Qt, QEvent, QTimer, QPoint, QSize, Signal, QSortFilterProxyModel
+from PySide6.QtCore import Qt, QEvent, QTimer, QPoint, QSize, Signal, QThread
 from PySide6.QtGui import QPixmap, QPainter, QColor, QFont, QCursor
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
                                QComboBox, QSlider, QPushButton, QListWidget,
                                QListWidgetItem, QTableWidget, QTableWidgetItem, QMenu,
-                               QApplication, QStackedLayout, QSplitter, QMessageBox,
+                               QStackedLayout, QSplitter, QMessageBox,
                                QToolTip, QHeaderView, QAbstractItemView)
 
-from app.filters import filter_records, unique_loras, unique_tags, ratio_bucket, ratio_text, group_counts
+from app.filters import filter_records, unique_loras, unique_tags, record_model_names
 from app.civitai import BASE_MODEL_GROUPS
 from app.thumbs import load_pixmap, rounded_pixmap
-from app.ui.hover_popup import HoverPopup, MAX_W as HOVER_MAX_W, MAX_H as HOVER_MAX_H
+from app.ui.hover_popup import HoverPopup
 from app.ui.detail_dialog import DetailDialog, copy_text
 from app.ui.detail_sidebar import DetailSidebar
 
@@ -30,6 +31,46 @@ _NO_IMG_CACHE = {}   # size -> QPixmap（复用，避免 frozen 环境反复创�
 # GDI 绘制 → 几十秒卡死）；分批 QTimer 让事件循环在批次间处理绘制/输入，窗口保持可用。
 GRID_CHUNK = 40       # 每批渲染的平铺 item 数
 GRID_CHUNK_MS = 16    # 批次间隔（ms）
+
+# v3.6 视频分辨率：表格中未存 width/height 的视频记录由后台线程解析（防 UI 卡）。
+# 每批最多解析 VIDEO_SIZE_CAP 个文件（video_size 内部 5s 超时），一批完成后自动续下一批；
+# _video_size_cache 按文件路径缓存结果，避免重复解析。
+VIDEO_SIZE_CAP = 50
+
+
+def _records_fingerprint(records: list) -> tuple:
+    """记录列表指纹：长度 + (id, 图片/视频路径, 宽, 高) 序列。
+
+    v3.9：reload 用指纹比较判断内容是否变化——相同则跳过一切 UI 重建
+    （保留滚动位置/选中项/当前渲染，刷新 0 闪烁）。tuple 序列比较，避免 hash 碰撞。
+    """
+    return (len(records),
+            tuple((r.get("id"),
+                   r.get("image_file") or r.get("video_file") or r.get("virtual_path"),
+                   r.get("width"), r.get("height"))
+                  for r in records))
+
+
+class _VideoSizeWorker(QThread):
+    """R2: 后台解析视频分辨率（每文件最多阻塞 5s，失败返回 (0,0)）。"""
+
+    done = Signal(str, int, int)   # uid, width, height
+
+    def __init__(self, items, parent=None):
+        super().__init__(parent)
+        self._items = list(items)
+
+    def run(self):
+        from app.video_meta import video_size
+        for uid, path in self._items:
+            try:
+                w, h = video_size(path)
+            except Exception:
+                w, h = 0, 0
+            try:
+                self.done.emit(uid, w, h)
+            except RuntimeError:
+                return
 
 
 def _no_image_pixmap(size: int) -> QPixmap:
@@ -64,15 +105,23 @@ class GalleryPanel(QWidget):
         super().__init__(parent)
         self.store = store
         self._records = []
+        self._fp = None   # v3.9：reload 指纹（None=未初始化，首次必然重建）
         self._by_uid = {}
-        self._popup_index = -1
         self._pending_show = None
         self._current_group = "全部"   # 固定 key（"全部"/"未分组"/组名），不随语言翻译
         self._sort_key = "time"
         self._sort_desc = True
         self._view_mode = "grid"       # grid | table
-        self._pm_cache = {}            # uid -> QPixmap（悬停/缩略图缓存，避免磁盘 IO 卡顿）
+        # uid@size tile 键 + hover:uid 悬停键的 LRU 缓存（上限 600，满则淘汰最久未用）
+        self._pm_cache = OrderedDict()
         self._scanning = False         # v3.4：后台扫描输出文件夹中（空态提示用）
+        # v3.6：搜索防抖（150ms）+ 预计算搜索索引（reload 时一次性构建）
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(150)
+        self._search_timer.timeout.connect(self._apply)
+        self._search_index = None      # {uid: hay}；None = 未构建（回退 filter_records 原逻辑）
+        self._missing_map = {}         # {uid: [缺失字段]}：reload 时一次算好，避免每 tile 3× exists
         # v3.5：平铺分片渲染（大数据量分批 QTimer，批次间事件循环处理绘制/输入）
         self._chunk_timer = QTimer(self)
         self._chunk_timer.setInterval(GRID_CHUNK_MS)
@@ -85,7 +134,17 @@ class GalleryPanel(QWidget):
         self._hover_timer.setSingleShot(True)
         self._hover_timer.setInterval(120)
         self._hover_timer.timeout.connect(self._show_pending_popup)
+        # v3.6 修正 R2b：悬浮预览开关（设置里可关闭，关闭后完全禁用省资源）
+        # 注意：实时从 store 读取（改设置立即生效），不缓存构造值
         self._popup = HoverPopup()
+        # v3.6 R2：视频分辨率解析缓存/队列（表格兜底解析，防重复 + 防 UI 卡）
+        self._video_size_cache = {}     # 视频文件路径 → (w, h)
+        self._video_size_pending = []   # 待解析 (uid, path) 队列
+        self._video_size_worker = None  # 当前后台解析线程
+        # v4.0：虚拟记录「缩略图缺失」的 uid 集合——缺失时不缓存占位图（否则缩略图
+        # 生成后 reload 仍命中旧占位缓存、永远不更新）；缩略图生成完成后由
+        # _refresh_missing_thumbs 精准重渲染这些 tile。
+        self._missing_thumb_uids = set()
         self.reload()
 
     def set_scanning(self, scanning: bool):
@@ -125,9 +184,14 @@ class GalleryPanel(QWidget):
 
         - 虚拟记录（is_virtual）不检查：文件在 ComfyUI 输出目录，不属于资料库
         - 仅提示不自动删记录：用户可能外部移动文件但想保留记录
+        - v3.6：优先用 reload 时预计算的 _missing_map（避免每 tile 3 次 Path.exists），
+          未在 map 中的记录（如测试直调）回退实时检查，行为不变。
         """
         if not rec or rec.get("is_virtual"):
             return []
+        cached = self._missing_map.get(rec.get("id"))
+        if cached is not None:
+            return cached
         miss = []
         if rec.get("image_file") and not (self.store.images_dir / rec["image_file"]).exists():
             miss.append("image_file")
@@ -142,6 +206,21 @@ class GalleryPanel(QWidget):
         if self._missing_files(rec):
             return "  ⚠ " + tr("文件缺失")
         return ""
+
+    def _build_missing_map(self):
+        """reload 时一次算好所有真实记录的缺失字段，避免每 tile 渲染重复 stat。"""
+        self._missing_map = {}
+        for r in self._records:
+            if r.get("is_virtual"):
+                continue
+            miss = []
+            if r.get("image_file") and not (self.store.images_dir / r["image_file"]).exists():
+                miss.append("image_file")
+            if r.get("thumb_file") and not (self.store.thumbs_dir / r["thumb_file"]).exists():
+                miss.append("thumb_file")
+            if r.get("video_file") and not (self.store.videos_dir / r["video_file"]).exists():
+                miss.append("video_file")
+            self._missing_map[r["id"]] = miss
 
     # ================= UI =================
     def _build(self):
@@ -167,7 +246,9 @@ class GalleryPanel(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText(tr("搜索标题 / 标签 / 提示词 / 模型名 / 主模型大类"))
         self.search.setClearButtonEnabled(True)
-        self.search.textChanged.connect(self._apply)
+        # v3.6：搜索防抖——每键触发 _apply 会全量过滤 + 重排（实测 35ms/键），
+        # 改为 150ms 静默期后统一执行一次，连续输入只计算最后一次
+        self.search.textChanged.connect(self._on_search_text)
         bar.addWidget(self.search, 1)
 
         bar.addWidget(self._tool_label(tr("主模型")))
@@ -311,6 +392,10 @@ class GalleryPanel(QWidget):
         self.gallery.setUniformItemSizes(True)
         self.gallery.setSpacing(14)
         self.gallery.setWordWrap(True)
+        # v4.0：grid 模式滚轮按像素滚动（默认 ScrollPerItem 滚一格跨一整行 ~200px，
+        # 体感像翻页）；ScrollPerPixel + singleStep=20 更平滑精细。
+        self.gallery.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.gallery.verticalScrollBar().setSingleStep(20)
         # v3.0：支持多选（Ctrl/Shift），右键批量操作
         self.gallery.setSelectionMode(QListWidget.ExtendedSelection)
         self.gallery.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -324,9 +409,10 @@ class GalleryPanel(QWidget):
         # 详细列表
         self.detail = QTableWidget()
         self.detail.setObjectName("detailTable")
-        self.detail.setColumnCount(7)
+        # v3.6 R1：新增「类型」列（图片/视频），放在缩略图后标题前
+        self.detail.setColumnCount(8)
         self.detail.setHorizontalHeaderLabels(
-            ["", tr("标题"), tr("主模型"), tr("模型清单"), tr("提示词"), tr("尺寸"), tr("导入时间")])
+            ["", tr("类型"), tr("标题"), tr("主模型"), tr("模型清单"), tr("提示词"), tr("尺寸"), tr("导入时间")])
         self.detail.verticalHeader().setVisible(False)
         self.detail.setShowGrid(False)
         self.detail.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -335,15 +421,16 @@ class GalleryPanel(QWidget):
         self.detail.setRowHeight(0, 60)
         # 所有列允许用户拖动调节宽度（Interactive），并给出合理初始宽度
         self.detail.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-        for c in range(1, 7):
+        for c in range(1, 8):
             self.detail.horizontalHeader().setSectionResizeMode(c, QHeaderView.Interactive)
         self.detail.setColumnWidth(0, 68)
-        self.detail.setColumnWidth(1, 140)   # 标题
-        self.detail.setColumnWidth(2, 90)    # 主模型
-        self.detail.setColumnWidth(3, 180)   # 模型清单
-        self.detail.setColumnWidth(4, 160)   # 提示词
-        self.detail.setColumnWidth(5, 90)    # 尺寸
-        self.detail.setColumnWidth(6, 150)   # 导入时间
+        self.detail.setColumnWidth(1, 70)    # 类型
+        self.detail.setColumnWidth(2, 140)   # 标题
+        self.detail.setColumnWidth(3, 90)    # 主模型
+        self.detail.setColumnWidth(4, 180)   # 模型清单
+        self.detail.setColumnWidth(5, 160)   # 提示词
+        self.detail.setColumnWidth(6, 90)    # 尺寸
+        self.detail.setColumnWidth(7, 150)   # 导入时间
         self.detail.horizontalHeader().setStretchLastSection(False)
         # 不用 Qt 自带排序（避免与工具栏排序冲突），改为表头点击自定义排序
         self.detail.setSortingEnabled(False)
@@ -403,7 +490,8 @@ class GalleryPanel(QWidget):
             self._apply()
 
     # 列表模式表头点击 → 同步工具栏排序（与平铺模式一致）
-    _HEADER_SORT = {1: "title", 2: "base_model", 3: "models", 5: "size", 6: "time"}
+    # v3.6 R1：新增类型列(1)后，标题/主模型/模型清单/尺寸/时间列号 +1
+    _HEADER_SORT = {2: "title", 3: "base_model", 4: "models", 6: "size", 7: "time"}
 
     def _on_header_clicked(self, col):
         key = self._HEADER_SORT.get(col)
@@ -465,7 +553,24 @@ class GalleryPanel(QWidget):
             self._records.extend(vout)
         except Exception:
             pass
-        self._pm_cache.clear()
+        # v3.9：指纹比较——内容未变时跳过一切 UI 重建（下拉重建、_apply 全跳过），
+        # 保留滚动位置/选中项/当前渲染，刷新 0 闪烁。
+        # 注意：self._records 已赋新值（即使指纹相同也赋值——外部可能引用它）。
+        # _view_mode 计入指纹：切换显示方式后 reload 应重建；同模式同数据则跳过。
+        fp = (self._view_mode, _records_fingerprint(self._records))
+        if self._fp == fp:
+            return
+        self._fp = fp
+        # v3.6：reload 只清 hover 预览键，保留 uid@size tile 键——虚拟记录被重扫
+        # 后 uid 不变、缩略图内容不变，继续复用避免首屏全部重新解码（架构师实测
+        # 全清 → 首屏全部重新解码卡顿）；hover 键依赖磁盘图片内容，刷新后失效。
+        for k in [k for k in self._pm_cache if k.startswith("hover:")]:
+            del self._pm_cache[k]
+        # v3.6：预计算搜索索引 + 缺失标记（一次遍历，filter/渲染零重复计算）
+        self._search_index = {}
+        for r in self._records:
+            self._search_index[r["id"]] = self._hay_for(r)
+        self._build_missing_map()
         types_present = {(r.get("base_model") or "其他") for r in self._records}
         cur_base = self.base_combo.currentText()
         self.base_combo.blockSignals(True)
@@ -504,6 +609,20 @@ class GalleryPanel(QWidget):
         self.tag_combo.blockSignals(False)
         self._apply()
 
+    def _on_search_text(self, text):
+        """搜索框输入：防抖 150ms 后统一 _apply（连续输入只算最后一次）。"""
+        self._search_timer.start()
+
+    @staticmethod
+    def _hay_for(r: dict) -> str:
+        """预计算单条记录的搜索文本（与 filter_records 原 hay 完全一致，小写）。"""
+        return " ".join([
+            r.get("title") or "", ",".join(r.get("tags") or []),
+            r.get("positive") or "", r.get("negative") or "",
+            r.get("base_model") or "", r.get("base_model_raw") or "",
+            " ".join(record_model_names(r)),
+        ]).lower()
+
     def _filtered(self) -> list:
         # 下拉显示的是当前语言，反查回中文 key 再筛选
         return filter_records(
@@ -516,6 +635,7 @@ class GalleryPanel(QWidget):
             group=self._current_group,
             media_type=self.media_combo.currentData(),
             tag=self.tag_combo.currentText() if self.tag_combo.currentText() != tr("全部标签") else "全部",
+            search_index=self._search_index,
         )
 
     def _apply(self):
@@ -524,8 +644,15 @@ class GalleryPanel(QWidget):
         # 触发的新渲染必须取消进行中的分片，避免旧定时器继续往新列表里加 item
         self._cancel_chunk_render()
         records = self._sorted(self._filtered())
-        # 虚拟记录上限：Windows GDI 对象限制，一次渲染过多 QPixmap 会卡死/崩溃
-        VIRT_CAP = 250
+        # 虚拟记录上限：Windows GDI 对象限制，一次渲染过多 QPixmap 会卡死/崩溃。
+        # v3.9：上限可在设置中配置（virtual_cap_enabled / virtual_cap_count），
+        # 实时读取（改设置立即生效）；关闭限制时用超大值（不截断，也不提示截断）。
+        cap_enabled = self.store.load_setting("virtual_cap_enabled", "1") != "0"
+        try:
+            cap = int(self.store.load_setting("virtual_cap_count", "250") or "250")
+        except Exception:
+            cap = 250
+        VIRT_CAP = cap if cap_enabled else 10 ** 9
         virt = [r for r in records if r.get("is_virtual")]
         real = [r for r in records if not r.get("is_virtual")]
         capped = len(virt) > VIRT_CAP
@@ -636,6 +763,7 @@ class GalleryPanel(QWidget):
         for row, r in enumerate(records):
             uid = r["id"]
             self._by_uid[uid] = r
+            is_video = (r.get("media_type") == "video")
             # 缩略图列：仅显示缩略图，不携带任何文本（setData 会覆盖显示文本）
             thumb = QTableWidgetItem()
             thumb.setData(Qt.UserRole, uid)
@@ -643,37 +771,110 @@ class GalleryPanel(QWidget):
             thumb.setIcon(pm)
             thumb.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             self.detail.setItem(row, 0, thumb)
-            # 标题
-            is_video = (r.get("media_type") == "video")
-            ti = QTableWidgetItem(("▶ " if is_video else "") + (r.get("title") or "") + self._missing_marker(r))
+            # v3.6 R1：类型列（图片/视频）——放在缩略图后、标题前
+            ty = QTableWidgetItem(tr("视频") if is_video else tr("图片"))
+            ty.setData(Qt.UserRole, uid)
+            self.detail.setItem(row, 1, ty)
+            # 标题（v3.6 R1：去掉 "▶ " 前缀——类型列已标识，避免重复）
+            ti = QTableWidgetItem((r.get("title") or "") + self._missing_marker(r))
             ti.setData(Qt.UserRole, uid)
-            self.detail.setItem(row, 1, ti)
+            self.detail.setItem(row, 2, ti)
             # 主模型大类
             bi = QTableWidgetItem(tr(r.get("base_model") or "其他"))
             bi.setData(Qt.UserRole, uid)
-            self.detail.setItem(row, 2, bi)
+            self.detail.setItem(row, 3, bi)
             # 模型清单
             ms = r.get("models") or []
             if not ms and r.get("model_name"):
                 ms = [{"name": r["model_name"], "type": tr(r.get("model_type") or "大模型")}]
             mi = QTableWidgetItem(self._models_brief(ms, r.get("loras") or []))
             mi.setData(Qt.UserRole, uid)
-            self.detail.setItem(row, 3, mi)
+            self.detail.setItem(row, 4, mi)
             # 提示词（短截断，避免占用过多横向空间；详情面板右侧有完整版）
             pos = (r.get("positive") or "").strip()
             pt = pos[:50] + ("…" if len(pos) > 50 else "") if pos else tr("（无）")
             pi = QTableWidgetItem(pt)
             pi.setData(Qt.UserRole, uid)
-            self.detail.setItem(row, 4, pi)
+            self.detail.setItem(row, 5, pi)
             # 尺寸（文本保持 "WxH" 格式）
+            # v3.6 R2：视频记录未存分辨率时先显示「解析中…」，后台线程解析完成后回填；
+            # 已解析过的路径直接显示缓存结果（含失败 (0,0) → 未知）
             w, h = r.get("width") or 0, r.get("height") or 0
-            si = QTableWidgetItem(f"{w}×{h}" if w else tr("未知"))
+            if is_video and (w == 0 or h == 0):
+                vpath = self._video_path_for(r)
+                cached = self._video_size_cache.get(vpath)
+                if cached:
+                    w, h = cached
+                else:
+                    si = QTableWidgetItem(tr("解析中…"))
+                    si.setData(Qt.UserRole, uid)
+                    self.detail.setItem(row, 6, si)
+                    if vpath:
+                        self._queue_video_size(uid, vpath)
+                    continue
+            si = QTableWidgetItem(f"{w}×{h}" if w and h else tr("未知"))
             si.setData(Qt.UserRole, uid)
-            self.detail.setItem(row, 5, si)
+            self.detail.setItem(row, 6, si)
             # 导入时间
             ci = QTableWidgetItem(r.get("created_at") or "")
             ci.setData(Qt.UserRole, uid)
-            self.detail.setItem(row, 6, ci)
+            self.detail.setItem(row, 7, ci)
+
+    # ================= v3.6 R2：视频分辨率兜底解析 =================
+    def _video_path_for(self, rec: dict) -> str:
+        """视频记录的实际文件路径：真实记录在 videos/，虚拟记录用 virtual_path。"""
+        if not rec:
+            return ""
+        if rec.get("is_virtual") and rec.get("virtual_path"):
+            return str(rec["virtual_path"])
+        if rec.get("video_file"):
+            return str(self.store.videos_dir / rec["video_file"])
+        return ""
+
+    def _queue_video_size(self, uid: str, path: str):
+        """把 (uid, path) 加入待解析队列并尝试启动后台 worker（每批最多 50）。"""
+        if not path:
+            return
+        self._video_size_pending.append((uid, path))
+        # 极端大量视频：只保留前 N 个待解析，其余保持「解析中…」（有界队列）
+        if len(self._video_size_pending) > VIDEO_SIZE_CAP * 4:
+            self._video_size_pending = self._video_size_pending[:VIDEO_SIZE_CAP * 4]
+        self._pump_video_size_queue()
+
+    def _pump_video_size_queue(self):
+        """若当前无 worker 运行则取一批（<=50）启动；worker 完成后自动续下一批。"""
+        if not self._video_size_pending:
+            return
+        worker = getattr(self, "_video_size_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        batch = self._video_size_pending[:VIDEO_SIZE_CAP]
+        self._video_size_pending = self._video_size_pending[VIDEO_SIZE_CAP:]
+        self._video_size_worker = _VideoSizeWorker(batch)
+        self._video_size_worker.done.connect(self._on_video_size_done)
+        self._video_size_worker.finished.connect(self._pump_video_size_queue)
+        self._video_size_worker.start()
+
+    def _on_video_size_done(self, uid: str, w: int, h: int):
+        """后台解析完成：写缓存 + 回填表格该行尺寸单元格（行可能已刷新，按 uid 查找）。"""
+        try:
+            rec = self._by_uid.get(uid)
+            vpath = self._video_path_for(rec) if rec else ""
+            if vpath:
+                self._video_size_cache[vpath] = (w, h)
+            row = -1
+            for rr in range(self.detail.rowCount()):
+                it = self.detail.item(rr, 0)
+                if it is not None and it.data(Qt.UserRole) == uid:
+                    row = rr
+                    break
+            if row < 0:
+                return
+            si = QTableWidgetItem(f"{w}×{h}" if w and h else tr("未知"))
+            si.setData(Qt.UserRole, uid)
+            self.detail.setItem(row, 6, si)
+        except RuntimeError:
+            pass
 
     @staticmethod
     def _models_brief(models: list, loras: list) -> str:
@@ -695,11 +896,19 @@ class GalleryPanel(QWidget):
             parts.append("、".join(others[:2]))
         return " · ".join(parts) if parts else "—"
 
+    def _pm_cache_set(self, key: str, pm: QPixmap):
+        """LRU 写入：新键插到末尾，超上限 600 时淘汰最久未用（popitem(last=False)）。"""
+        self._pm_cache[key] = pm
+        self._pm_cache.move_to_end(key)
+        while len(self._pm_cache) > 600:
+            self._pm_cache.popitem(last=False)
+
     def _tile_pixmap(self, r: dict, size: int) -> QPixmap:
-        """缩略图/平铺图（带缓存，避免反复磁盘 IO 与解码造成的卡顿）。"""
+        """缩略图/平铺图（带 LRU 缓存，避免反复磁盘 IO 与解码造成的卡顿）。"""
         uid = r.get("id")
         key = f"{uid}@{size}"
         if key in self._pm_cache:
+            self._pm_cache.move_to_end(key)
             return self._pm_cache[key]
         if r.get("thumb_file"):
             path = str(self.store.thumbs_dir / r["thumb_file"])
@@ -708,30 +917,89 @@ class GalleryPanel(QWidget):
             path = str(self.store.images_dir / r["image_file"])
             pm = rounded_pixmap(path, size) if Path(path).exists() else _no_image_pixmap(size)
         elif r.get("is_virtual") and r.get("virtual_path"):
-            # 虚拟记录：用缩略图缓存（后台线程生成）；无缓存时显示占位图，避免读原图卡顿
+            # 虚拟记录：用缩略图缓存（后台线程生成）；无缓存时显示占位图，避免读原图卡顿。
+            # v4.0：缺失时**不缓存** uid 条目的占位图并记入 _missing_thumb_uids——缩略图
+            # 生成完成后 _refresh_missing_thumbs 重渲染即可显示，不会因 LRU 缓存永远
+            # 停在占位图（占位图本身复用 _NO_IMG_CACHE 全局缓存，仍零重复绘制开销）。
             try:
                 from app.comfy_output import thumb_path_for_rec
                 tp = thumb_path_for_rec(self.store, r)
                 if tp.exists() and tp.stat().st_size >= 100:
                     pm = rounded_pixmap(str(tp), size)
                 else:
-                    pm = _no_image_pixmap(size)
+                    if uid:
+                        self._missing_thumb_uids.add(uid)
+                    return _no_image_pixmap(size)
             except Exception:
-                pm = _no_image_pixmap(size)
+                return _no_image_pixmap(size)
         elif r.get("virtual_path") and Path(r["virtual_path"]).exists():
             pm = rounded_pixmap(str(r["virtual_path"]), size)
         else:
             pm = _no_image_pixmap(size)
-        if len(self._pm_cache) > 500:   # 防止无限增长
-            self._pm_cache.clear()
-        self._pm_cache[key] = pm
+        self._pm_cache_set(key, pm)
         return pm
 
+    def _refresh_missing_thumbs(self):
+        """缩略图生成完成后，精准重渲染仍显示占位图的虚拟记录 tile/表格缩略图。
+
+        v4.0：占位图不再缓存（_tile_pixmap 缺失分支直接返回），此处只遍历
+        _missing_thumb_uids 对应的 item，命中已生成的缩略图后更新图标并从集合移除
+        （增量成本 = 缺失条数 × 一次 stat，远小于全量 reload 重渲染）。
+        """
+        if not self._missing_thumb_uids:
+            return
+        try:
+            from app.comfy_output import thumb_path_for_rec
+        except Exception:
+            return
+        refreshed = set()
+        # grid 平铺 item
+        icon_w = self.gallery.iconSize().width()
+        for i in range(self.gallery.count()):
+            li = self.gallery.item(i)
+            uid = li.data(Qt.UserRole)
+            if uid not in self._missing_thumb_uids:
+                continue
+            rec = self._by_uid.get(uid)
+            if not rec:
+                continue
+            try:
+                tp = thumb_path_for_rec(self.store, rec)
+                if tp.exists() and tp.stat().st_size >= 100:
+                    li.setIcon(self._tile_pixmap(rec, icon_w))
+                    refreshed.add(uid)
+            except Exception:
+                continue
+        # table 模式缩略图列
+        for row in range(self.detail.rowCount()):
+            it = self.detail.item(row, 0)
+            if not it:
+                continue
+            uid = it.data(Qt.UserRole)
+            if uid not in self._missing_thumb_uids:
+                continue
+            rec = self._by_uid.get(uid)
+            if not rec:
+                continue
+            try:
+                tp = thumb_path_for_rec(self.store, rec)
+                if tp.exists() and tp.stat().st_size >= 100:
+                    it.setIcon(self._tile_pixmap(rec, 52))
+                    refreshed.add(uid)
+            except Exception:
+                continue
+        self._missing_thumb_uids -= refreshed
+
     def _hover_pixmap(self, r: dict) -> QPixmap:
-        """悬停预览图：一次缩放到位并缓存，避免每次 hover 的磁盘 IO + 缩放开销。"""
+        """悬停预览图：一次缩放到位并缓存，避免每次 hover 的磁盘 IO + 缩放开销。
+
+        v3.6：虚拟记录优先用 comfy_output 缩略图缓存（400px jpg，~5ms），
+        无缩略图才回退原图（大 PNG 全解码 100-300ms 的悬停卡顿源）。
+        """
         uid = r.get("id")
         key = f"hover:{uid}"
         if key in self._pm_cache and not self._pm_cache[key].isNull():
+            self._pm_cache.move_to_end(key)
             return self._pm_cache[key]
         pm = None
         if r.get("thumb_file"):
@@ -739,14 +1007,22 @@ class GalleryPanel(QWidget):
         if (pm is None or pm.isNull()) and r.get("image_file"):
             pm = load_pixmap(str(self.store.images_dir / r["image_file"]), 480)
         if (pm is None or pm.isNull()) and r.get("virtual_path"):
-            pm = load_pixmap(str(r["virtual_path"]), 480)
+            tp = None
+            try:
+                from app.comfy_output import thumb_path_for_rec
+                tp = thumb_path_for_rec(self.store, r)
+            except Exception:
+                tp = None
+            if tp and tp.exists() and tp.stat().st_size >= 100:
+                pm = load_pixmap(str(tp), 480)
+            if pm is None or pm.isNull():
+                pm = load_pixmap(str(r["virtual_path"]), 480)
         if pm is None or pm.isNull():
             pm = _no_image_pixmap(120)
         # 预缩放为悬浮窗所需尺寸（380 内等比），show_image 直接 setPixmap 零开销
-        scaled = pm.scaled(HOVER_MAX_W, HOVER_MAX_H, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        if len(self._pm_cache) > 500:
-            self._pm_cache.clear()
-        self._pm_cache[key] = scaled
+        # （数值与 hover_popup.MAX_W/MAX_H 保持一致，避免引入额外 import）
+        scaled = pm.scaled(380, 380, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._pm_cache_set(key, scaled)
         return scaled
 
     def _wrap_stack(self) -> QWidget:
@@ -788,18 +1064,18 @@ class GalleryPanel(QWidget):
             return super().eventFilter(obj, event)
         et = event.type()
         if et == QEvent.MouseMove:
+            if self.store.load_setting("hover_preview", "1") == "0":
+                # v3.6 修正 R2b：用户关闭悬浮预览 → 完全禁用（实时读取，改设置立即生效）
+                self._hide_popup()
+                return super().eventFilter(obj, event)
             if self._view_mode == "grid":
-                idx = self.gallery.indexAt(event.position().toPoint())
-                row = idx.row()
-            else:
-                # viewport 坐标直接用于 rowAt（视口顶部即第一行，不要与表头高度比较）
-                row = self.detail.rowAt(event.position().toPoint().y())
-            gpos = event.globalPosition().toPoint()
-            if self._popup.isVisible() and row == self._popup_index:
-                self._reposition_popup(gpos)
-            else:
-                self._pending_show = (row, gpos)
-                self._hover_timer.start()
+                # v3.6 R3：平铺(grid)模式完全禁用悬浮预览窗——不启动 hover timer
+                self._hide_popup()
+                return super().eventFilter(obj, event)
+            # table 模式：viewport 坐标直接用于 rowAt（视口顶部即第一行，不要与表头高度比较）
+            row = self.detail.rowAt(event.position().toPoint().y())
+            self._pending_show = row
+            self._hover_timer.start()
         elif et in (QEvent.Leave, QEvent.MouseButtonPress, QEvent.Wheel, QEvent.MouseButtonDblClick):
             self._hide_popup()
         return super().eventFilter(obj, event)
@@ -807,34 +1083,30 @@ class GalleryPanel(QWidget):
     def _show_pending_popup(self):
         if self._pending_show is None:
             return
-        row, gpos = self._pending_show
+        if self.store.load_setting("hover_preview", "1") == "0":
+            # v3.6 修正 R2b：开关关闭时绝不显示悬停预览（实时读取）
+            self._pending_show = None
+            return
+        row = self._pending_show
         self._pending_show = None
+        if self._view_mode != "table":
+            # v3.6 R3：仅列表(table)模式显示悬停预览（平铺模式禁用）
+            return
         if row < 0:
             return
-        rec = None
-        if self._view_mode == "grid":
-            li = self.gallery.item(row)
-            rec = self._by_uid.get(li.data(Qt.UserRole)) if li else None
-        else:
-            item = self.detail.item(row, 0)
-            rec = self._by_uid.get(item.data(Qt.UserRole)) if item else None
+        item = self.detail.item(row, 0)
+        rec = self._by_uid.get(item.data(Qt.UserRole)) if item else None
         if not rec:
             return
-        self._popup_index = row
-        screen = self.gallery.screen() or self.gallery.window().screen()
-        rect = screen.availableGeometry() if screen else self.gallery.rect()
-        # 纯图片预览：直接用缓存的 pixmap，避免磁盘 IO
-        self._popup.show_image(self._hover_pixmap(rec), gpos, rect)
-
-    def _reposition_popup(self, gpos):
-        rect = self.gallery.screen().availableGeometry()
-        self._popup.reposition(gpos, rect)
+        # v3.7：悬停预览 → 右侧详情侧栏顶部大图（不再弹浮动窗/发主窗口左侧面板）
+        self.sidebar.set_preview(rec)
 
     def _hide_popup(self):
         self._hover_timer.stop()
         self._pending_show = None
-        self._popup_index = -1
         self._popup.hide()
+        # v3.7：清除右侧侧栏预览态（恢复选中记录的大图或占位）
+        self.sidebar.clear_preview()
 
     # ================= 右键菜单 =================
     def _record_at(self, pos: QPoint, mode: str) -> dict:
@@ -1010,7 +1282,6 @@ class GalleryPanel(QWidget):
                                        QListWidget, QListWidgetItem, QPushButton,
                                        QMessageBox)
         from app.config import APP_NAME
-        import time as _t
 
         def thumb_of(r):
             if r.get("thumb_file"):
@@ -1132,9 +1403,9 @@ class GalleryPanel(QWidget):
         pos = rec.get("positive") or ""
         neg = rec.get("negative") or ""
         if which == "positive":
-            ok = copy_text(pos)
+            ok, removed = copy_text(pos)
         elif which == "negative":
-            ok = copy_text(neg)
+            ok, removed = copy_text(neg)
         else:
             parts = [pos]
             if neg:
@@ -1158,8 +1429,11 @@ class GalleryPanel(QWidget):
                 meta.append(f"Base model: {rec.get('base_model_raw') or rec['base_model']}")
             if meta:
                 parts.append(" ".join(meta))
-            ok = copy_text("\n".join(parts).strip())
-        QToolTip.showText(QCursor.pos(), tr("已复制到剪贴板 ✓") if ok else tr("没有内容可复制"))
+            ok, removed = copy_text("\n".join(parts).strip())
+        msg = tr("已复制到剪贴板 ✓")
+        if removed:
+            msg = f"{msg} {tr_format('已清理 {n} 个不可见字符', n=removed)}"
+        QToolTip.showText(QCursor.pos(), msg if ok else tr("没有内容可复制"))
 
     def _copy_current(self, which):
         rec = None

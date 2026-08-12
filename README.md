@@ -7,7 +7,25 @@
 
 ---
 
-## ✨ v3.1.0 新功能 / What's New in v3.1.0
+## ✨ v3.2.0 新功能 / What's New in v3.2.0
+
+| 功能 / Feature | 中文 | English |
+| --- | --- | --- |
+| 悬停预览大图化 | 列表模式悬停 → 右侧详情栏显示 360px 大图（原左侧 170px 小框废弃），平铺模式不显示，可开关 | Hover preview enlarged: hovering a row shows a 360px preview in the right detail sidebar; grid mode off; toggle in Settings |
+| 视频分辨率显示 | 纯本地 mp4 解析，导入的视频正确显示尺寸（不再"未知"） | Video resolution: local mp4 parser shows correct size (no more "Unknown") |
+| 收藏作品批量保存修复 | 多链接一次导入后「全部保存」，每张图提示词/模型各自对应，不再串成同一个；自动跳过仍在导入/无图的项并提示；链接尾随中文标点自动剥离 | Collect batch-save fix: after multi-link import, "Save All" keeps each image's own prompt/model; skips importing/no-image items with a notice; strips trailing CJK punctuation from URLs |
+| 「我的作品」显示数量可配置 | 设置中可限制显示数量（默认 250，可调 50~10000）或取消限制 | Configurable "My Works" display cap (default 250, adjustable 50–10000, or unlimited) |
+| 输出文件夹实时增量更新 | 每 15 秒后台增量检测，新增/删除/移动的图片自动同步到图库与分组，无需手动刷新；只处理变化的文件、无变化零开销 | Real-time incremental updates: 15s background delta scan auto-syncs new/deleted/moved images to gallery & groups — no manual refresh; only changed files processed, zero cost when nothing changed |
+| 刷新不闪烁 | 数据未变时点击刷新界面纹丝不动（保留滚动位置与选中项） | No flicker on refresh: unchanged data keeps the UI untouched (scroll & selection preserved) |
+| 新图片缩略图自动补全 | 缩略图生成失败自动重试、缺失占位不缓存，生成后即时替换 | Missing thumbnails auto-fill: failed thumbs retried, placeholders never cached, swapped in as soon as ready |
+| 设置页改版 | 输出文件夹列表每行一个文件夹（含浏览/删除按钮），标题更通用为「自动导入文件夹」；「张」单位不再混入输入框 | Settings redesign: one output-folder per row (open/remove buttons), renamed to the generic "Auto-Import Folders"; unit "张" moved out of the spinbox |
+| 图库滚轮优化 | 平铺模式按像素平滑滚动，不再一格翻页 | Smoother mouse-wheel: grid scrolls per-pixel, no more page-jump per tick |
+
+---
+
+## 📜 历史更新记录 / Changelog
+
+### ✨ v3.1.0 新功能 / What's New in v3.1.0
 
 | 功能 / Feature | 中文 | English |
 | --- | --- | --- |
@@ -36,8 +54,10 @@
 | --- | --- |
 | **收藏作品**：拖入 / 粘贴图片、Civitai 图片·模型·视频链接一键导入（自动提取提示词、模型清单、采样参数并下载原图/视频） | **Collect**: drag & drop / paste images, one-click Civitai image·model·video link import (auto-extracts prompts, model lists, sampling params, downloads originals) |
 | **本地参数提取**：自动读取 SD WebUI（A1111）/ ComfyUI / NovelAI 导出 PNG 的内嵌生成参数 | **Local param extraction**: auto-reads embedded generation params from SD WebUI (A1111) / ComfyUI / NovelAI PNGs |
-| **ComfyUI 输出图库**：扫描 ComfyUI 输出目录（含子目录），以"虚拟引用"纳入图库（不复制文件、不占额外硬盘），子目录自动分组，磁盘缓存启动秒级 | **ComfyUI output gallery**: scans output folders (incl. subfolders) as "virtual references" — no copying, no extra disk; auto-grouped by folder; disk-cached instant startup |
-| **图库浏览**：平铺 / 列表双模式、排序、多条件筛选（主模型大类 / 比例 / LoRA / 来源 / 关键词）、悬停预览、右键快捷操作 | **Gallery**: grid / list views, sorting, multi-filter (base model / ratio / LoRA / source / keyword), hover preview, right-click shortcuts |
+| **自动导入图库（「我的作品」）**：扫描「自动导入文件夹」（如 ComfyUI 输出目录，含子目录），以"虚拟引用"纳入图库（不复制文件、不占额外硬盘），子目录自动分组，磁盘缓存启动秒级；每 15 秒后台增量检测，新增/删除/移动自动同步，无需手动刷新 | **Auto-import gallery ("My Works")**: scans Auto-Import Folders (e.g. ComfyUI output, incl. subfolders) as "virtual references" — no copying, no extra disk; auto-grouped; disk-cached instant startup; 15s background delta scan keeps new/deleted/moved files in sync with no manual refresh |
+| **图库浏览**：平铺 / 列表双模式、排序、多条件筛选（主模型大类 / 比例 / LoRA / 来源 / 关键词）、列表悬停右侧 360px 大图预览（可开关）、右键快捷操作 | **Gallery**: grid / list views, sorting, multi-filter (base model / ratio / LoRA / source / keyword), 360px hover preview in the detail sidebar (toggleable), right-click shortcuts |
+| **显示数量可配置**：「我的作品」显示数量可在设置中限制（默认 250，可调 50~10000）或取消限制 | **Configurable display cap**: cap "My Works" items in Settings (default 250, 50–10000, or unlimited) |
+| **缩略图自愈**：缩略图生成失败自动重试，缺失占位不缓存，生成后即时替换 | **Thumbnail self-heal**: failed thumbnails are retried, placeholders are never cached and swap in as soon as ready |
 | **分组管理**：自定义分组 + 「我的作品」虚拟分组树（含计数） | **Groups**: custom groups + "My Works" virtual group tree (with counts) |
 | **批量操作**：多选批量改分组 / 改主模型 / 删除 / 导出（CSV / Markdown，可仅提示词） | **Batch**: multi-select move / delete / export (CSV / Markdown, prompts-only option) |
 | **重复检测**：一键找出内容重复的图片，对比后保留最清晰的一张 | **Duplicate detection**: finds visually duplicated images, keeps the sharpest |
@@ -132,10 +152,10 @@ On push to `main` or a tag (`v*`), CI runs unit tests → `python build.py` → 
   **Civitai import sometimes fails**: the app auto-switches between civitai.com / civitai.red and retries — just try again later.
 - **网页拖图失败**：图片有防盗链时可右键保存后拖入本地文件。
   **Web drag fails**: if hotlink protection blocks it, save the image first, then drag in the local file.
-- **「我的作品」不显示**：确认设置中的「ComfyUI 输出文件夹」正确，首次扫描在后台进行；也可点工具栏「刷新」按钮手动触发。
-  **"My Works" missing**: check the ComfyUI output folders in Settings; first scan runs in background — or click the "Refresh" button.
-- **「文件缺失」标记**：源文件被移动 / 删除，图库只引用原路径，请检查 output 目录。
-  **"File Missing" badge**: the source file was moved/deleted — the gallery only references the path, check your output folder.
+- **「我的作品」不显示**：确认设置中的「自动导入文件夹」正确，首次扫描在后台进行；也可点工具栏「刷新」按钮手动触发。
+  **"My Works" missing**: check the Auto-Import Folders in Settings; first scan runs in background — or click the "Refresh" button.
+- **「文件缺失」标记**：源文件被移动 / 删除，图库只引用原路径，请检查自动导入文件夹。
+  **"File Missing" badge**: the source file was moved/deleted — the gallery only references the path, check your auto-import folders.
 - **模型下载 403 / HTML 错误页**：在设置中填入 Civitai API Key 后重试。
   **Model download 403 / HTML error**: add a Civitai API Key in Settings and retry.
 - **换电脑**：把 `Library/` 文件夹整个拷走即可。

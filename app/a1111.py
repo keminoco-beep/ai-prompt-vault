@@ -10,8 +10,6 @@ import hashlib
 import time
 from pathlib import Path
 
-from app.i18n import t as tr
-
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 

@@ -38,6 +38,26 @@ class HoverPopup(QWidget):
         self.show()
         self.raise_()
 
+    def show_image_anchored(self, pixmap: QPixmap, anchor, screen_rect):
+        """固定锚点显示：anchor 为左上角锚点（左缘对齐、垂直居中），不跟随鼠标。
+
+        v3.6 修正：列表模式悬浮窗固定于视口左侧中部（用户要求），不再跟随鼠标。
+        """
+        if pixmap is None or pixmap.isNull():
+            self.hide()
+            return
+        self.img_label.setPixmap(pixmap)
+        self.adjustSize()
+        size = self.sizeHint()
+        x = anchor.x()
+        y = anchor.y() - size.height() // 2
+        x = max(screen_rect.left(), min(x, screen_rect.right() - size.width()))
+        y = max(screen_rect.top(), min(y, screen_rect.bottom() - size.height()))
+        if x != self.x() or y != self.y():
+            self.move(x, y)
+        self.show()
+        self.raise_()
+
     def reposition(self, global_pos, screen_rect):
         """鼠标同图片内移动时仅更新位置（无重绘开销）。"""
         self._place(global_pos, screen_rect)

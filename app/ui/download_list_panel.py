@@ -4,14 +4,13 @@
 修复：选中闪烁 / 无按钮 / UI 高度过高。
 """
 import time
-from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, QSize
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                                QProgressBar, QListWidget, QListWidgetItem, QFrame)
 
-from app.i18n import t as tr, tr_format
+from app.i18n import t as tr
 
 
 def _fmt_size(n: int) -> str:

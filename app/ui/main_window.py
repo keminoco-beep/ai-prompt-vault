@@ -1,12 +1,12 @@
 import logging
 from app.i18n import t as tr, tr_format
 """主窗口：侧边栏导航 + 分组区 + 收藏/浏览两个板块 + 全局粘贴快捷键。"""
-from PySide6.QtCore import Qt, QEvent, QTimer, QSize
+from PySide6.QtCore import Qt, QTimer
 
 logger = logging.getLogger(__name__)
-from PySide6.QtGui import (QKeySequence, QShortcut, QDesktopServices, QPainter, QPixmap,
+from PySide6.QtGui import (QKeySequence, QShortcut, QPainter, QPixmap,
                            QColor, QFont, QBrush, QLinearGradient)
-from PySide6.QtCore import QRectF, QUrl
+from PySide6.QtCore import QRectF
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QStackedWidget, QButtonGroup, QLineEdit,
                                QPlainTextEdit, QTextEdit, QComboBox, QApplication,
@@ -25,6 +25,10 @@ class MainWindow(QMainWindow):
     # （命中内存缓存秒级）；仅当扫描线程异常阻塞/死循环时触发强制清除「正在扫描」标记，
     # 避免 UI 永远卡在「正在后台扫描输出文件夹…」。测试可用短值覆盖。
     MAX_SCAN_SECONDS = 300
+
+    # v3.9：定时增量监听输出文件夹的间隔（秒）。只 diff 不重扫（省磁盘读写、0 卡顿）；
+    # 无 output dirs 时回调直接 return，不报错；全量/手动刷新后重置计时起点。
+    DELTA_SCAN_SECONDS = 15
 
     def __init__(self, store, output_scan: bool = True):
         super().__init__()
@@ -87,6 +91,7 @@ class MainWindow(QMainWindow):
         sv.addWidget(self.collect_btn)
         sv.addWidget(self.gallery_btn)
         sv.addWidget(self.model_btn)
+
         sv.addStretch(1)
 
         # -------- 分组区（折叠） --------
@@ -181,10 +186,22 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import QTimer
         self._scan_thread = None
         self._thumb_thread = None
+        # v4.0：缩略图线程占用中收到新请求时置位，当前线程结束后链式重启一轮——
+        # 修复「增量新增图片永远不生成缩略图」（旧逻辑直接 return 跳过，运行中的
+        # 线程快照不含新增文件，且无任何后续触发）。
+        self._thumb_pending = False
         # 扫描超时兜底定时器（非重复）：_start_output_scan 启动，正常完成/强制清除时停止
         self._scan_timeout = QTimer(self)
         self._scan_timeout.setSingleShot(True)
         self._scan_timeout.timeout.connect(self._force_clear_scanning)
+        # v3.9：定时增量监听输出文件夹（15s 一次，只 diff 不重扫，0 卡顿）。
+        # 仅在配置了 output dirs 时工作；无 dirs 时回调直接 return（测试环境静默）。
+        self._delta_timer = QTimer(self)
+        self._delta_timer.setInterval(int(getattr(self, "DELTA_SCAN_SECONDS", 15)) * 1000)
+        self._delta_timer.timeout.connect(self._on_delta_timer)
+        self._delta_thread = None
+        if self.output_scan:
+            self._delta_timer.start()
         if self.output_scan:
             QTimer.singleShot(800, self._start_output_scan)
 
@@ -198,7 +215,11 @@ class MainWindow(QMainWindow):
             self._scan_timeout.stop()
         except Exception:
             pass
-        for attr in ("_scan_thread", "_thumb_thread"):
+        try:
+            self._delta_timer.stop()
+        except Exception:
+            pass
+        for attr in ("_scan_thread", "_thumb_thread", "_delta_thread"):
             th = getattr(self, attr, None)
             if th is None:
                 continue
@@ -217,7 +238,23 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self.store, self)
         dlg.theme_changed.connect(self.apply_theme)
         dlg.outputDirsChanged.connect(self._on_output_dirs_changed)
+        dlg.settingsApplied.connect(self._on_settings_applied)
         dlg.exec()
+
+    def _on_settings_applied(self):
+        """设置保存后：仅刷新分组 + 图库（读缓存秒级），不触发后台重扫。
+
+        v3.9：settingsApplied 由 SettingsDialog._save 发出——改虚拟作品显示上限等
+        即时生效的设置时，避免 outputDirsChanged 的全量重扫（改个数字就重扫太浪费）。
+        """
+        try:
+            self.refresh_groups()
+        except Exception:
+            pass
+        try:
+            self.gallery_panel.reload()
+        except Exception:
+            pass
 
     def _on_output_dirs_changed(self):
         """设置保存后输出目录变化：立即刷新分组（秒级枚举）+ 图库（读缓存）+ 后台扫描写缓存。
@@ -243,6 +280,7 @@ class MainWindow(QMainWindow):
                 pass
             try:
                 _co._cache.clear()
+                _co.clear_memos()
             except Exception:
                 pass
         except Exception:
@@ -346,6 +384,11 @@ class MainWindow(QMainWindow):
         #    正常完成（_on_output_scanned）或下次扫描前取消/重置。
         self._scan_timeout.stop()
         self._scan_timeout.start(int(getattr(self, "MAX_SCAN_SECONDS", 300)) * 1000)
+        # v3.9：全量/手动刷新后重置定时增量监听的计时起点（restart 会重新计数）
+        try:
+            self._delta_timer.start()
+        except Exception:
+            pass
         th.start()
 
     def _on_output_scanned(self):
@@ -370,6 +413,73 @@ class MainWindow(QMainWindow):
             pass
         self._start_thumb_gen()
 
+    # ================= v3.9：定时增量监听输出文件夹 =================
+    def _on_delta_timer(self):
+        """定时增量监听回调：后台 diff 输出文件夹，有变化才刷新（无变化零开销）。
+
+        - 无 output dirs / 全量或增量扫描线程占用中 → 直接 return（不报错，静默）
+        - 线程身份校验沿用 _on_output_scanned 的模式（旧线程 done 忽略）
+        """
+        from app.comfy_output import configured_output_dirs
+        dirs = configured_output_dirs(self.store)
+        if not dirs:
+            return
+        # 全量/增量扫描线程占用中：跳过本次（避免并发读写同一磁盘缓存）
+        for attr in ("_scan_thread", "_delta_thread"):
+            th = getattr(self, attr, None)
+            if th is None:
+                continue
+            try:
+                if th.isRunning():
+                    return
+            except RuntimeError:
+                pass
+        cache_file = str(self.store.root / "comfy_output_cache.json")
+
+        from PySide6.QtCore import QThread, Signal as QtSignal
+        class _DeltaThread(QThread):
+            done = QtSignal(object)   # dict: added/removed/changed/records
+
+            def run(self):
+                try:
+                    from app.comfy_output import scan_output_images_delta
+                    result = scan_output_images_delta(
+                        dirs, cache_file,
+                        cancel_cb=lambda: self.isInterruptionRequested())
+                except Exception:
+                    result = {"added": 0, "removed": 0, "changed": 0, "records": []}
+                try:
+                    self.done.emit(result)
+                except RuntimeError:
+                    pass
+
+        th = _DeltaThread(self)
+        th.done.connect(self._on_delta_scanned)
+        th.finished.connect(th.deleteLater)
+        self._delta_thread = th
+        th.start()
+
+    def _on_delta_scanned(self, result):
+        """增量扫描完成：有变化才刷新（分组 + 图库 + 缩略图），无变化什么都不做。"""
+        sender = self.sender()
+        if sender is not None and sender is not self._delta_thread:
+            return   # 旧增量线程的完成信号：忽略
+        try:
+            if not result:
+                return
+            n = ((result.get("added") or 0) + (result.get("removed") or 0)
+                 + (result.get("changed") or 0))
+            if n <= 0:
+                return   # 无变化：不 reload、不刷 UI（真正 0 开销无感）
+            self.refresh_groups()
+            try:
+                self.gallery_panel.reload()
+            except Exception:
+                pass
+            self._start_thumb_gen()
+        except Exception:
+            pass
+
     def _force_clear_scanning(self):
         """扫描超时兜底：扫描线程异常阻塞/死循环时强制清除「正在扫描」标记。
 
@@ -388,12 +498,26 @@ class MainWindow(QMainWindow):
                 pass
 
     def _start_thumb_gen(self):
-        """后台线程为虚拟记录生成缩略图缓存（每批 60 张刷新图库）。"""
+        """后台线程为虚拟记录生成缩略图缓存（每批 60 张刷新图库）。
+
+        v4.0：若已有缩略图线程在跑，不直接跳过——置 _thumb_pending 标记，
+        当前线程结束后 _on_thumb_finished 自动再启动一轮，保证增量新增的文件
+        最终一定被处理（generate_all_thumbs 幂等，只补缺失的缩略图，成本低）。
+        """
         from PySide6.QtCore import QThread, Signal as QtSignal
         from app.comfy_output import configured_output_dirs
         dirs = configured_output_dirs(self.store)
         if not dirs:
             return
+        # v3.9：已有缩略图线程在跑则跳过（增量监听每 15s 可能触发，避免线程堆积）
+        old = getattr(self, "_thumb_thread", None)
+        if old is not None:
+            try:
+                if old.isRunning():
+                    self._thumb_pending = True
+                    return
+            except RuntimeError:
+                pass
         try:
             from app.comfy_output import thumb_dir_for
             thumb_dir = thumb_dir_for(self.store)
@@ -414,15 +538,25 @@ class MainWindow(QMainWindow):
 
         th = _ThumbThread(self)
         th.progress.connect(self._on_thumb_progress)
+        th.finished.connect(self._on_thumb_finished)
         th.finished.connect(th.deleteLater)
         self._thumb_thread = th
         th.start()
+
+    def _on_thumb_finished(self):
+        """缩略图线程结束：若期间有新的缩略图请求（增量新增文件），链式重启一轮。"""
+        if getattr(self, "_thumb_pending", False):
+            self._thumb_pending = False
+            self._start_thumb_gen()
 
     def _on_thumb_progress(self, done, total):
         """缩略图批量生成后刷新图库（仅当图库可见时）。"""
         try:
             if self.stack.currentWidget() is self.gallery_panel:
                 self.gallery_panel.reload()
+            # v4.0：精准重渲染仍显示占位图的虚拟记录 tile（缩略图刚生成）——
+            # 不依赖 reload 指纹变化，避免占位图被 LRU 缓存导致永不更新
+            self.gallery_panel._refresh_missing_thumbs()
         except Exception:
             pass
 
@@ -441,7 +575,7 @@ class MainWindow(QMainWindow):
         动画对象必须保存引用（局部变量会被 GC 回收导致动画不执行）。
         """
         try:
-            from PySide6.QtCore import QPropertyAnimation, QPoint, QAbstractAnimation
+            from PySide6.QtCore import QPropertyAnimation, QPoint
             from PySide6.QtWidgets import QLabel, QGraphicsOpacityEffect
         except Exception:
             return

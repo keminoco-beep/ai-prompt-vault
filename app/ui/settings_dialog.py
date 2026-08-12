@@ -1,8 +1,10 @@
-"""设置对话框：语言切换、主题、ComfyUI 输出文件夹（多目录）、ComfyUI 根目录（模型下载）、API Key、资料库位置（多语言）。"""
+"""设置对话框：语言切换、主题、自动导入文件夹（多目录）、ComfyUI 根目录（模型下载）、API Key、资料库位置（多语言）。"""
 from pathlib import Path
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-                               QPushButton, QMessageBox, QFileDialog, QLineEdit)
+                               QPushButton, QMessageBox, QFileDialog, QLineEdit, QCheckBox,
+                               QSpinBox, QWidget)
 
 from app import i18n
 from app.i18n import t as tr
@@ -12,6 +14,7 @@ from app.config import APP_NAME
 class SettingsDialog(QDialog):
     theme_changed = Signal(str)        # 主题即时切换（"dark"/"light"）
     outputDirsChanged = Signal()       # 输出目录集合变化（保存后发出，主窗口触发重新扫描）
+    settingsApplied = Signal()         # v3.9：设置保存后发出（主窗口仅刷新分组+图库，不触发重扫）
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -74,34 +77,73 @@ class SettingsDialog(QDialog):
         thint.setWordWrap(True)
         root.addWidget(thint)
 
-        # ---- ComfyUI 输出文件夹（多目录，直接填写 output 文件夹路径） ----
-        out_row = QHBoxLayout()
-        out_row.setSpacing(10)
-        olb = QLabel(tr("ComfyUI 输出文件夹"))
-        olb.setObjectName("fieldLabel")
-        out_row.addWidget(olb)
-        self.output_edit = QLineEdit()
-        self.output_edit.setReadOnly(True)
-        self.output_edit.setPlaceholderText(tr("选择 ComfyUI 输出文件夹"))
-        self._update_output_edit()
-        out_row.addWidget(self.output_edit, 1)
+        # ---- 悬浮预览开关（列表模式悬停显示预览图） ----
+        hp_row = QHBoxLayout()
+        hp_row.setSpacing(10)
+        self.hover_check = QCheckBox(tr("启用悬浮预览（列表模式）"))
+        self.hover_check.setChecked(self.store.load_setting("hover_preview", "1") != "0")
+        hp_row.addWidget(self.hover_check)
+        hp_row.addStretch(1)
+        root.addLayout(hp_row)
+
+        hpint = QLabel(tr("关闭后不再显示悬停预览图，可减少资源占用；设置立即生效。"))
+        hpint.setObjectName("hint")
+        hpint.setWordWrap(True)
+        root.addWidget(hpint)
+
+        # ---- 限制我的作品显示数量（虚拟作品上限，v3.9 可配置，保存后立即生效） ----
+        cap_row = QHBoxLayout()
+        cap_row.setSpacing(10)
+        self.cap_check = QCheckBox(tr("限制我的作品显示数量"))
+        self.cap_check.setChecked(self.store.load_setting("virtual_cap_enabled", "1") != "0")
+        cap_row.addWidget(self.cap_check)
+        cap_row.addSpacing(8)
+        cap_lb = QLabel(tr("我的作品最多显示"))
+        cap_lb.setObjectName("fieldLabel")
+        cap_row.addWidget(cap_lb)
+        self.cap_spin = QSpinBox()
+        self.cap_spin.setRange(50, 10000)
+        try:
+            self.cap_spin.setValue(int(self.store.load_setting("virtual_cap_count", "250") or "250"))
+        except Exception:
+            self.cap_spin.setValue(250)
+        # v4.0：不再 setSuffix("张")——暗色 QSS 下 suffix 区域未渲染样式，
+        # 中文单位"张"会溢出显示到输入框编辑区内；改为旁边独立 QLabel 显示单位。
+        self.cap_unit = QLabel(tr("张"))
+        self.cap_unit.setObjectName("fieldLabel")
+        self.cap_spin.setEnabled(self.cap_check.isChecked())
+        self.cap_check.toggled.connect(self.cap_spin.setEnabled)
+        cap_row.addWidget(self.cap_spin)
+        cap_row.addWidget(self.cap_unit)
+        cap_row.addStretch(1)
+        root.addLayout(cap_row)
+
+        # ---- 自动导入文件夹（多目录，每行一个文件夹 + 浏览/删除按钮） ----
+        # v4.0：从「单行 QLineEdit + 移除所选弹窗」改为「每行一个文件夹」，
+        # 路径不再被截断；标题改为通用名（不再叫 ComfyUI 输出文件夹）。
+        self.out_dir_title = QLabel(tr("自动导入文件夹"))
+        self.out_dir_title.setObjectName("fieldLabel")
+        root.addWidget(self.out_dir_title)
+        dir_cont = QWidget()
+        self._dir_list_layout = QVBoxLayout(dir_cont)
+        self._dir_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._dir_list_layout.setSpacing(6)
+        root.addWidget(dir_cont)
+        self._dir_rows = []          # list[dict]: path/widget/edit/browse/del
+        self._rebuild_dir_rows()
+
+        dir_btns = QHBoxLayout()
+        dir_btns.setSpacing(10)
         add_btn = QPushButton(tr("添加文件夹"))
         add_btn.setObjectName("ghost")
         add_btn.clicked.connect(self._add_output_dir)
-        out_row.addWidget(add_btn)
-        root.addLayout(out_row)
-
-        out_btns = QHBoxLayout()
-        out_btns.addStretch(1)
-        rm_btn = QPushButton(tr("移除所选"))
-        rm_btn.setObjectName("ghost")
-        rm_btn.clicked.connect(self._remove_output_dir)
-        out_btns.addWidget(rm_btn)
+        dir_btns.addWidget(add_btn)
+        dir_btns.addStretch(1)
         clr_btn = QPushButton(tr("清空"))
         clr_btn.setObjectName("ghost")
         clr_btn.clicked.connect(self._clear_output_dirs)
-        out_btns.addWidget(clr_btn)
-        root.addLayout(out_btns)
+        dir_btns.addWidget(clr_btn)
+        root.addLayout(dir_btns)
 
         ohint = QLabel(tr("可添加多个输出文件夹，图库将按文件夹自动分组。"))
         ohint.setObjectName("hint")
@@ -199,7 +241,7 @@ class SettingsDialog(QDialog):
         btns.addWidget(ok)
         root.addLayout(btns)
 
-    # ---------- ComfyUI 输出文件夹（多目录） ----------
+    # ---------- 自动导入文件夹（多目录） ----------
     def _load_output_dirs(self) -> list:
         """读取当前输出目录配置（只读 comfy_output_dirs，不再回退 comfyui_dir）。
 
@@ -212,34 +254,72 @@ class SettingsDialog(QDialog):
             return []
         return normalize_output_dirs(dirs)
 
-    def _update_output_edit(self):
-        self.output_edit.setText("；".join(self._output_dirs))
+    def _rebuild_dir_rows(self):
+        """按 self._output_dirs 重建行 widget（增删/回显/测试直改内部列表后同步 UI）。"""
+        for entry in list(self._dir_rows):
+            self._dir_list_layout.removeWidget(entry["widget"])
+            entry["widget"].deleteLater()
+        self._dir_rows.clear()
+        for d in self._output_dirs:
+            self._make_dir_row(d)
+
+    def _make_dir_row(self, d: str):
+        """为单个文件夹创建一行：只读路径 + 「浏览」（系统文件管理器）+ 「×」删除。"""
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        edit = QLineEdit(d)
+        edit.setReadOnly(True)
+        lay.addWidget(edit, 1)
+        browse_btn = QPushButton(tr("浏览"))
+        browse_btn.setObjectName("ghost")
+        browse_btn.clicked.connect(lambda _=False, p=d: self._open_dir_in_explorer(p))
+        lay.addWidget(browse_btn)
+        del_btn = QPushButton("×")
+        del_btn.setObjectName("ghost")
+        del_btn.setToolTip(tr("移除该文件夹"))
+        del_btn.clicked.connect(lambda _=False, p=d: self._remove_dir_row(p))
+        lay.addWidget(del_btn)
+        self._dir_list_layout.addWidget(row)
+        self._dir_rows.append({"path": d, "widget": row, "edit": edit,
+                               "browse": browse_btn, "del": del_btn})
+        return row
+
+    @staticmethod
+    def _open_dir_in_explorer(path: str):
+        """在系统文件管理器中打开文件夹（测试通过 monkeypatch spy 验证）。"""
+        try:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        except Exception:
+            pass
+
+    def _remove_dir_row(self, path: str):
+        """删除指定路径对应的行（找到即删；重复路径只删第一个）。"""
+        for entry in list(self._dir_rows):
+            if entry["path"] == path:
+                self._dir_list_layout.removeWidget(entry["widget"])
+                entry["widget"].deleteLater()
+                self._dir_rows.remove(entry)
+                break
+        self._output_dirs = [e["path"] for e in self._dir_rows]
 
     def _add_output_dir(self):
         from pathlib import Path
         start = self._output_dirs[-1] if self._output_dirs else ""
-        d = QFileDialog.getExistingDirectory(self, tr("选择 ComfyUI 输出文件夹"), start)
+        d = QFileDialog.getExistingDirectory(self, tr("自动导入文件夹"), start)
         if d:
             d = str(Path(d).resolve())
             if d not in self._output_dirs:
                 self._output_dirs.append(d)
-                self._update_output_edit()
-
-    def _remove_output_dir(self):
-        if not self._output_dirs:
-            QMessageBox.information(self, tr(APP_NAME), tr("请先添加输出文件夹"))
-            return
-        from PySide6.QtWidgets import QInputDialog
-        cur, ok = QInputDialog.getItem(
-            self, tr("移除所选"), tr("选择要移除的输出文件夹："),
-            self._output_dirs, 0, False)
-        if ok and cur:
-            self._output_dirs = [d for d in self._output_dirs if d != cur]
-            self._update_output_edit()
+                self._make_dir_row(d)
 
     def _clear_output_dirs(self):
+        for entry in list(self._dir_rows):
+            self._dir_list_layout.removeWidget(entry["widget"])
+            entry["widget"].deleteLater()
+        self._dir_rows.clear()
         self._output_dirs = []
-        self._update_output_edit()
 
     def _pick_library_dir(self):
         from pathlib import Path
@@ -271,6 +351,8 @@ class SettingsDialog(QDialog):
 
     def _save(self):
         from app.comfy_output import normalize_output_dirs
+        # v4.0：行 widget 与内部列表同步（测试/外部直改 _output_dirs 后保存时回显一致）
+        self._rebuild_dir_rows()
         # 基线 = store 中**已持久化**的配置（保存前读取，尚未被本次写入覆盖；
         # 只读 comfy_output_dirs，不再含 comfyui_dir 回退），与本次编辑后的 new_dirs
         # 比较，集合不同才 emit。
@@ -283,6 +365,11 @@ class SettingsDialog(QDialog):
         api_key = self.key_edit.text().strip()
         self.store.save_setting("civitai_api_key", api_key)
         self.store.save_setting("a1111_dir", self.a1111_edit.text().strip())
+        # 悬浮预览开关（关闭后列表模式不显示悬停预览，省资源）
+        self.store.save_setting("hover_preview", "1" if self.hover_check.isChecked() else "0")
+        # 限制我的作品显示数量（虚拟作品上限，v3.9 可配置；保存后立即生效）
+        self.store.save_setting("virtual_cap_enabled", "1" if self.cap_check.isChecked() else "0")
+        self.store.save_setting("virtual_cap_count", str(self.cap_spin.value()))
         self.store.save_setting("theme", self.theme_combo.currentData() or "dark")
         # 多资料库：library_dir_custom 必须写到默认库的 settings.json（main 启动时从默认库读取）
         new_lib = self.lib_edit.text().strip()
@@ -299,6 +386,8 @@ class SettingsDialog(QDialog):
             QMessageBox.information(
                 self, tr(APP_NAME),
                 tr("output 目录已变更，正在后台扫描…"))
+        # v3.9：设置保存后即时生效（仅刷新分组 + 图库，不触发重扫）
+        self.settingsApplied.emit()
         self.accept()
 
     def _on_lang_changed(self, idx):

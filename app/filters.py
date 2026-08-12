@@ -1,8 +1,6 @@
 """筛选逻辑：主模型大类分类、图片比例分类、记录过滤、模型/LoRA 汇总。"""
 from math import gcd
 
-from app.civitai import BASE_MODEL_GROUPS
-
 RATIOS = ["全部比例", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "超宽", "超高", "其他"]
 
 
@@ -91,13 +89,16 @@ def merge_loras(existing: list, positive_prompt: str) -> list:
 def filter_records(records: list, base_model: str = "全部", ratio: str = "全部比例",
                    lora: str = "全部", source: str = "全部", search: str = "",
                    group: str = "全部", media_type: str = "全部",
-                   tag: str = "全部") -> list:
+                   tag: str = "全部", search_index=None) -> list:
     """筛选记录。
 
     base_model: 主模型大类（如 Krea 2 / Flux.1 / Flux.2 / SDXL …），对应记录 base_model。
     lora: 使用的 LoRA 名称（部分匹配）。
     search: 关键词搜索（标题/标签/提示词/模型名/主模型大类）。
     group: 手动分组（"全部"=不过滤，"未分组"=group 为空，其他=指定组名）。
+    search_index: 可选 {record_id: 预计算小写 hay}（调用方 reload 时一次构建）。
+        提供时搜索命中为 O(1) 子串判断，避免每次按键重复拼接 hay（实测 35ms/键）；
+        缺省 None 回退原逻辑（逐条拼接），签名向后兼容。
     """
     out = []
     search = (search or "").strip().lower()
@@ -133,14 +134,27 @@ def filter_records(records: list, base_model: str = "全部", ratio: str = "全�
             elif rg != group and not rg.startswith(group + "/"):
                 continue
         if search:
-            hay = " ".join([
-                r.get("title") or "", ",".join(r.get("tags") or []),
-                r.get("positive") or "", r.get("negative") or "",
-                r.get("base_model") or "", r.get("base_model_raw") or "",
-                " ".join(record_model_names(r)),
-            ]).lower()
-            if search not in hay:
-                continue
+            if search_index is not None:
+                # O(1) 命中：直接查预计算索引；缺 id 兜底走原逻辑
+                hay = search_index.get(r.get("id"))
+                if hay is None:
+                    hay = " ".join([
+                        r.get("title") or "", ",".join(r.get("tags") or []),
+                        r.get("positive") or "", r.get("negative") or "",
+                        r.get("base_model") or "", r.get("base_model_raw") or "",
+                        " ".join(record_model_names(r)),
+                    ]).lower()
+                if search not in hay:
+                    continue
+            else:
+                hay = " ".join([
+                    r.get("title") or "", ",".join(r.get("tags") or []),
+                    r.get("positive") or "", r.get("negative") or "",
+                    r.get("base_model") or "", r.get("base_model_raw") or "",
+                    " ".join(record_model_names(r)),
+                ]).lower()
+                if search not in hay:
+                    continue
         out.append(r)
     return out
 

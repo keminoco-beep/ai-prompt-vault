@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, QBuffer, QIODevice, QThreadPool, QTimer, QSize, Q
 from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QFont, QDesktopServices
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                                QFrame, QLineEdit, QPlainTextEdit, QComboBox, QPushButton,
-                               QListWidget, QListWidgetItem, QApplication, QSizePolicy)
+                               QListWidget, QListWidgetItem, QApplication)
 
 from app.civitai import parse_link, BASE_MODEL_GROUPS
 from app.filters import merge_loras
@@ -320,9 +320,16 @@ class CollectPanel(QWidget):
             return
         from PySide6.QtWidgets import QToolTip
         from PySide6.QtGui import QCursor
-        QApplication.clipboard().setText(text)
-        self._status(tr("已复制 ✓"))
-        QToolTip.showText(QCursor.pos(), tr("已复制到剪贴板 ✓"))
+        from app.text_clean import safe_copy_to_clipboard
+        ok, removed = safe_copy_to_clipboard(text)
+        if ok:
+            msg = tr("已复制 ✓")
+            if removed:
+                msg = f"{msg} {tr_format('已清理 {n} 个不可见字符', n=removed)}"
+            self._status(msg)
+            QToolTip.showText(QCursor.pos(), tr("已复制到剪贴板 ✓"))
+        else:
+            self._status(tr("没有可复制的内容"), ok=False)
 
     # ---------- 模型清单编辑器 ----------
     def _add_model_row(self, name: str = "", mtype: str = tr("大模型"), url: str = ""):
@@ -654,7 +661,8 @@ class CollectPanel(QWidget):
             return
         found = 0
         for m in re.finditer(r"https?://civitai\.(?:com|red)/[^\s,，;；]+", text, re.I):
-            p = parse_link(m.group(0))
+            # 剥离 URL 尾部被误吞的中文标点（如 。，、）等），避免污染 parse_link 结果
+            p = parse_link(_strip_url_trailing(m.group(0)))
             if p:
                 self._start_civitai_import(p)
                 found += 1
@@ -707,12 +715,16 @@ class CollectPanel(QWidget):
             if not item["record"].get("source_url") or not is_import:
                 auto_filled = self._fill_from_image_meta(uid)
         if res.get("video_file"):
-            # 视频导入结果：media_type=video + 首帧缩略图 + 时长
+            # 视频导入结果：media_type=video + 首帧缩略图 + 时长 + 分辨率
             item["video_file"] = res["video_file"]
             item["record"]["media_type"] = "video"
             item["thumb_file"] = res.get("thumb_file") or ""
             if res.get("duration"):
                 item["record"]["duration"] = res["duration"]
+            if res.get("width"):
+                item["record"]["width"] = res["width"]
+            if res.get("height"):
+                item["record"]["height"] = res["height"]
         self._update_item_visual(self._li_of(uid), item)
         if self._li_of(uid) == self.pending_list.currentItem():
             self._apply_form(item)
@@ -733,13 +745,17 @@ class CollectPanel(QWidget):
         if res.get("image_file"):
             item["image_file"] = res["image_file"]
         if res.get("video_file"):
-            # Civitai 视频：media_type=video + 首帧缩略图 + 时长
+            # Civitai 视频：media_type=video + 首帧缩略图 + 时长 + 分辨率
             item["video_file"] = res["video_file"]
             item["record"]["media_type"] = "video"
             if res.get("thumb_file"):
                 item["thumb_file"] = res["thumb_file"]
             if res.get("duration"):
                 item["record"]["duration"] = res["duration"]
+            if fields.get("width"):
+                item["record"]["width"] = fields["width"]
+            if fields.get("height"):
+                item["record"]["height"] = fields["height"]
         err = res.get("error") or ""
         if err:
             self._status(err, ok=False)
@@ -760,12 +776,20 @@ class CollectPanel(QWidget):
         self._status(tr("导入失败：") + err, ok=False)
 
     # ---------- 保存 ----------
-    def _build_record(self, item: dict) -> dict:
-        # 把表单最新内容合并进待保存项；**空值不覆盖**已提取的数据
-        # （图片自动提取的提示词/模型等保留，用户手动填写的值优先）
-        form = self._read_form()
-        item["record"].update({k: v for k, v in form.items() if v})
-        r = item["record"]
+    def _build_record(self, item: dict, merge_form: bool = True) -> dict:
+        """把待保存项构造成完整记录。
+
+        merge_form=True：把右侧表单最新内容合并进 record（**空值不覆盖**已提取的数据，
+        用户手动填写的值优先），用于「保存当前」或「全部保存」中的当前选中项
+        （用户正在表单里编辑该项，编辑必须生效）。
+        merge_form=False：直接用 item["record"] 已有数据（多链接导入时其余项保留
+        各自独立提取的提示词/模型，避免被共享表单污染）。
+        注意：合并在 record 的副本上进行，不修改 item["record"]（保存中断也不污染待保存项）。
+        """
+        r = dict(item["record"])
+        if merge_form:
+            form = self._read_form()
+            r.update({k: v for k, v in form.items() if v})
         models = r.get("models") or []
         loras = merge_loras(
             [m["name"] for m in models if m.get("type") == "LoRA" and m.get("name")],
@@ -814,7 +838,11 @@ class CollectPanel(QWidget):
         item = self.pending.get(uid)
         if not item:
             return
-        if not item["image_file"] and not item.get("video_file") and not item["record"].get("source_url"):
+        if item.get("state") == "importing":
+            # Civitai/本地文件还在后台提取/下载，record 尚未填充完整，禁止保存
+            self._status(tr("请等待导入完成"), ok=False)
+            return
+        if not item["image_file"] and not item.get("video_file"):
             self._status(tr("这条还没有图片，无法保存"), ok=False)
             return
         rec = self._build_record(item)
@@ -827,18 +855,37 @@ class CollectPanel(QWidget):
         if not self.pending:
             self._status(tr("待保存列表为空"), ok=False)
             return
+        # 仅当前选中项合并表单（用户正在编辑它）；其余项保留各自导入数据，
+        # 避免多链接导入时所有项被“当前选中项的表单”污染成同一份提示词
+        cur_li = self.pending_list.currentItem()
+        cur_uid = cur_li.data(Qt.UserRole) if cur_li is not None else None
         n = 0
+        skipped_importing = 0
+        skipped_no_image = 0
         for uid in list(self.pending.keys()):
             item = self.pending[uid]
-            if not item["image_file"] and not item.get("video_file") and not item["record"].get("source_url"):
+            if item.get("state") == "importing":
+                skipped_importing += 1
                 continue
-            rec = self._build_record(item)
+            if not item["image_file"] and not item.get("video_file"):
+                skipped_no_image += 1
+                continue
+            rec = self._build_record(item, merge_form=(uid == cur_uid))
             self.store.add(rec)
             self._remove_pending(uid)
             n += 1
+        msgs = []
         if n:
-            self._status(tr_format("已保存 {n} 条 ✓", n=n))
+            msgs.append(tr_format("已保存 {n} 条 ✓", n=n))
+        if skipped_importing:
+            msgs.append(tr_format("有 {n} 条仍在导入中，已跳过", n=skipped_importing))
+        if skipped_no_image:
+            msgs.append(tr_format("有 {n} 条无图片，已跳过", n=skipped_no_image))
+        if n:
+            self._status("；".join(msgs))
             self.recordsSaved.emit()
+        elif msgs:
+            self._status("；".join(msgs), ok=False)
         else:
             self._status(tr("没有可保存的完整项（缺图片）"), ok=False)
 
@@ -889,3 +936,16 @@ class CollectPanel(QWidget):
 def _id_of(source_url: str):
     m = re.search(r"/(?:images?|models?|model-versions?)/(\d+)", source_url)
     return int(m.group(1)) if m else None
+
+
+# URL 尾部可保留的合法字符（Civitai 页面/图片链接的路径与查询字符集）
+_URL_TRAIL_OK = r"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_\-./?&=:#%+~"
+
+
+def _strip_url_trailing(url: str) -> str:
+    """剥离 URL 尾部被误吞的中文标点（如 。，、！？）等）。
+
+    多链接粘贴时中文标点常紧跟在链接后，原正则 [^\\s,，;；]+ 会把它们吞进匹配，
+    导致 URL 尾部带标点；此函数统一剔除尾部非 URL 合法字符。
+    """
+    return re.sub(rf"[^{_URL_TRAIL_OK}]+$", "", url or "")

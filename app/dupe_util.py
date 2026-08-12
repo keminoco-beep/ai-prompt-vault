@@ -3,7 +3,7 @@
 AI 绘画收集的重复图通常是同一张的不同尺寸/压缩版本，
 dHash 对缩放/轻微压缩鲁棒，适合此场景。
 """
-from PySide6.QtGui import QImage, QColor
+from PySide6.QtGui import QImage
 from PySide6.QtCore import Qt
 
 

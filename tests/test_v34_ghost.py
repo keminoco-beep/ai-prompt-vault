@@ -141,7 +141,7 @@ check("T3 网格标题带缺失标记", len(miss_titles) == 1, repr(miss_titles)
 gp._view_mode = "table"
 gp._apply()
 app.processEvents()
-tbl_titles = [gp.detail.item(r, 1).text() for r in range(gp.detail.rowCount())]
+tbl_titles = [gp.detail.item(r, 2).text() for r in range(gp.detail.rowCount())]  # 列2=标题（v3.6 新增类型列后）
 check("T3 表格标题带缺失标记", sum(1 for t in tbl_titles if "文件缺失" in t) == 1,
       repr(tbl_titles))
 

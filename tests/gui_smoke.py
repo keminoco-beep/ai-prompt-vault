@@ -2,6 +2,7 @@
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -23,6 +24,18 @@ def check(name, cond, detail=""):
     print(("  ✓ " if cond else "  ✗ ") + name + (f"  {detail}" if detail and not cond else ""))
     if not cond:
         FAIL.append(name)
+
+
+def _wait_search(app, ms=220):
+    """等待搜索防抖定时器（150ms）触发 _apply，再检查结果。
+
+    v3.6 搜索防抖后 setText 不立即过滤；这里让事件循环跑满防抖窗口，
+    保证后续断言读到的是过滤后的图库状态。
+    """
+    end = time.monotonic() + ms / 1000.0
+    while time.monotonic() < end:
+        app.processEvents()
+        time.sleep(0.01)
 
 
 def main():
@@ -87,7 +100,7 @@ def main():
     check("主模型大类筛选 Krea2=1", gp.gallery.count() == 1)
     gp.base_combo.setCurrentText("全部")
     gp.search.setText("不存在的词xyz")
-    app.processEvents()
+    _wait_search(app)
     check("空结果提示状态", gp.gallery.count() == 0 and gp.stack.currentIndex() == 2)
     gp.search.setText("")
     gp.ratio_combo.setCurrentText("9:16")
@@ -99,10 +112,10 @@ def main():
     check("LoRA 筛选=1", gp.gallery.count() == 1)
     gp.lora_combo.setCurrentText("全部")
     gp.search.setText("人像")
-    app.processEvents()
+    _wait_search(app)
     check("搜索 人像=1", gp.gallery.count() == 1)
     gp.search.setText("flux1dev")
-    app.processEvents()
+    _wait_search(app)
     check("搜索 模型名=1", gp.gallery.count() == 1)
     gp.search.setText("")
 
@@ -127,10 +140,10 @@ def main():
     gp._set_view_mode("table")
     app.processEvents()
     check("列表模式行数=2", gp.detail.rowCount() == 2, f"rows={gp.detail.rowCount()}")
-    check("列表模式列=7", gp.detail.columnCount() == 7)
+    check("列表模式列=8", gp.detail.columnCount() == 8)
     check("列表模式显示", gp.stack.currentIndex() == 1)
     # 列表表头排序（按尺寸面积）
-    gp.detail.sortItems(5, Qt.DescendingOrder)
+    gp.detail.sortItems(6, Qt.DescendingOrder)
     app.processEvents()
     check("列表按尺寸排序", gp.detail.rowCount() == 2)
     # 切回平铺

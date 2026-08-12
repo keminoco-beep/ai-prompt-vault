@@ -1,5 +1,5 @@
 ══════════════════════════════════════════════════════════
-      AI Prompt Vault  v3.1.0
+      AI Prompt Vault  v3.2.0
       Organiza tus obras de arte con IA (imágenes de referencia + prompts + modelos)
       Interfaz disponible en 中文 / English / Español / 日本語
 ══════════════════════════════════════════════════════════
@@ -206,6 +206,46 @@ se ignoran automáticamente.)
   usuario de civitai.red) y reintente
 
 ──────────────────────────────────────────────
+★ Novedades de v3.2.0
+──────────────────────────────────────────────
+Esta versión se centra en pulido, fiabilidad y sincronización
+en tiempo real (todas las correcciones y mejoras desde v3.1.0):
+
+1. Vista previa ampliada al pasar el ratón: al pasar el ratón
+   por una fila en modo Lista, el panel lateral derecho muestra
+   una vista previa de 360px (la antigua caja de 170px de la
+   izquierda se ha eliminado); en modo Cuadrícula no se muestra
+   y se puede activar/desactivar en Ajustes.
+2. Resolución de vídeo: un analizador mp4 totalmente local
+   muestra el tamaño correcto de los vídeos importados (ya no
+   aparece "Desconocido").
+3. Corrección del guardado por lotes de Colección: después de
+   importar varios enlaces a la vez, "Guardar todo" conserva el
+   prompt/modelo propio de cada imagen (ya no se mezclan); los
+   elementos que aún se importan o no tienen imagen se omiten
+   con un aviso; se elimina la puntuación CJK final de las URL.
+4. Límite de visualización configurable de "Mis Obras": limite
+   el número de elementos mostrados (predeterminado 250,
+   ajustable 50–10000) o desactive el límite en Ajustes.
+5. Actualizaciones incrementales en tiempo real: un escaneo
+   delta en segundo plano cada 15 segundos sincroniza
+   automáticamente las imágenes nuevas/eliminadas/movidas con
+   la galería y los grupos, sin actualización manual; solo se
+   procesan los archivos cambiados — coste cero si no hay cambios.
+6. Sin parpadeo al actualizar: actualizar con datos sin cambios
+   mantiene la interfaz intacta (se conservan la posición de
+   desplazamiento y la selección).
+7. Relleno automático de miniaturas: las miniaturas fallidas se
+   reintentan, los marcadores de posición no se cachean y las
+   miniaturas reales se intercambian en cuanto están listas.
+8. Rediseño de Ajustes: las carpetas de salida se muestran una
+   por fila con botones de abrir/eliminar, renombradas al nombre
+   genérico "Carpetas de importación automática"; la unidad "张"
+   ya no está dentro del cuadro numérico.
+9. Rueda del ratón más suave: el modo Cuadrícula se desplaza
+   píxel a píxel en lugar de saltar una página por tick.
+
+──────────────────────────────────────────────
 3. Gestión de datos
 ──────────────────────────────────────────────
 Todos los datos se guardan automáticamente en la subcarpeta
@@ -264,7 +304,30 @@ antigua con nombre chino "资料库" se migra automáticamente):
 ──────────────────────────────────────────────
 5. Historial de versiones
 ──────────────────────────────────────────────
-v3.1.0  (versión actual — todas las mejoras desde v3.0)
+v3.2.0  (esta versión — todas las correcciones y mejoras desde
+        v3.1.0)
+        · Vista previa ampliada al pasar el ratón (360px en el
+          panel lateral, configurable; en cuadrícula no)
+        · Resolución de vídeo (analizador mp4 local — ya no
+          "Desconocido")
+        · Corrección del guardado por lotes de Colección (cada
+          imagen conserva su prompt/modelo; omisión y aviso para
+          elementos en importación/sin imagen; se elimina la
+          puntuación CJK de las URL)
+        · Límite configurable de "Mis Obras" (predeterminado 250,
+          50–10000, o ilimitado)
+        · Actualizaciones incrementales en tiempo real (escaneo
+          delta cada 15 s; coste cero sin cambios)
+        · Sin parpadeo al actualizar (se conservan desplazamiento
+          y selección)
+        · Miniaturas con relleno automático (reintento, sin
+          marcadores cacheados, intercambio inmediato)
+        · Rediseño de Ajustes (una carpeta de salida por fila con
+          abrir/eliminar; renombradas "Carpetas de importación
+          automática")
+        · Rueda del ratón más suave (desplazamiento por píxeles
+          en cuadrícula)
+v3.1.0  (versión anterior — todas las mejoras desde v3.0)
         · Importación de enlaces de vídeo de Civitai (descarga
           del vídeo + extracción de parámetros + miniatura del
           primer fotograma)

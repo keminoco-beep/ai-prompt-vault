@@ -26,12 +26,13 @@ v3.3 多目录改造：
 """
 import hashlib
 import json
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from app.i18n import t as tr
+logger = logging.getLogger(__name__)
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 GROUP_ROOT = "my_works"   # 固定 key（不随语言翻译），显示时用 tr("我的作品")
@@ -39,6 +40,25 @@ GROUP_ROOT = "my_works"   # 固定 key（不随语言翻译），显示时用 tr
 # 内存缓存：{dirs_key: {"files": {dir_hash/rel: [mtime, size]}, "recs": {dir_hash/rel: rec}}}
 _cache = {}
 _CACHE_DIRTY = set()   # 兼容保留（历史上未使用，写盘由 scan 直接完成）
+
+# 磁盘缓存 memo：{(cache_file, dirs_key): {"files": ..., "recs": ..., "groups": ..., "mtime": ...}}
+# 目的：同一进程内 refresh_groups（load_cached_groups）与 GalleryPanel.reload
+# （load_cached_records）各读一次 comfy_output_cache.json（实测 8.8MB）→ 二次解析
+# 120ms+103ms。memo 命中直接返回，不再解析 JSON；mtime 校验防外部改写/删除。
+_disk_memo = {}
+
+# thumb_path_for_rec 结果缓存：{uid: Path}（避免每个 tile 都做 sha1 + mkdir）
+_thumb_path_cache = {}
+
+
+def _memo_key(cache_file, dirs_key):
+    return (str(cache_file), dirs_key)
+
+
+def clear_memos():
+    """清空磁盘缓存 memo 与缩略图路径缓存（目录集合变化/磁盘缓存被删时调用）。"""
+    _disk_memo.clear()
+    _thumb_path_cache.clear()
 
 
 # ---------------- 目录解析与规范化 ----------------
@@ -159,13 +179,34 @@ def _group_prefix_for(dirs, d, display_names=None) -> str:
 # ---------------- 磁盘缓存 ----------------
 
 def _load_disk_cache(cache_file, dirs_key=None):
-    """从磁盘加载缓存（文件不存在/解析失败/目录集合不匹配返回空，绝不抛异常）。"""
+    """从磁盘加载缓存（文件不存在/解析失败/目录集合不匹配返回空，绝不抛异常）。
+
+    模块级 memo：同一进程内 refresh_groups 与 GalleryPanel.reload 各读一次
+    comfy_output_cache.json（实测 8.8MB），命中 memo 直接返回不再解析 JSON。
+    memo 带文件 mtime/size 校验：磁盘文件被外部改写/删除时自动失效重读。
+    """
     try:
+        mkey = _memo_key(cache_file, dirs_key)
+        cached = _disk_memo.get(mkey)
+        if cached is not None:
+            try:
+                st = Path(cache_file).stat()
+                if cached.get("mtime") == (st.st_mtime_ns, st.st_size):
+                    return cached["files"], cached["recs"]
+            except OSError:
+                _disk_memo.pop(mkey, None)
+                return {}, {}
         data = json.loads(Path(cache_file).read_text(encoding="utf-8"))
         if dirs_key is not None and data.get("dirs") != dirs_key:
             return {}, {}
         files = {k: [float(v[0]), int(v[1])] for k, v in data.get("files", {}).items()}
         recs = {k: dict(v) for k, v in data.get("recs", {}).items()}
+        try:
+            st = Path(cache_file).stat()
+            mtime = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            mtime = None
+        _disk_memo[mkey] = {"files": files, "recs": recs, "groups": None, "mtime": mtime}
         return files, recs
     except Exception:
         return {}, {}
@@ -183,6 +224,14 @@ def _save_disk_cache(cache_file, files, recs, dirs_key):
         }
         Path(cache_file).write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        # 同步 memo：后续 load_cached_records / load_cached_groups 直接命中新内容
+        try:
+            st = Path(cache_file).stat()
+            mtime = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            mtime = None
+        _disk_memo[_memo_key(cache_file, dirs_key)] = {
+            "files": files, "recs": recs, "groups": None, "mtime": mtime}
     except Exception:
         pass
 
@@ -199,12 +248,15 @@ def invalidate_stale_cache(cache_file, dirs) -> bool:
         return False
     try:
         cf = Path(cache_file)
+        dkey = _dirs_key(dirs)
         if not cf.exists():
+            _disk_memo.pop(_memo_key(cf, dkey), None)
             return False
-        files, recs = _load_disk_cache(cf, _dirs_key(dirs))
+        files, recs = _load_disk_cache(cf, dkey)
         if files or recs:
             return False   # 缓存与当前配置匹配：有效，保留
         cf.unlink()
+        _disk_memo.pop(_memo_key(cf, dkey), None)
         return True
     except Exception:
         return False
@@ -215,22 +267,41 @@ def load_cached_records(cache_file, dirs=None) -> list:
 
     dirs 可选：传入当前目录列表时校验缓存与目录集合匹配，不匹配返回空（不抛异常）。
     供 UI 同步路径使用；目录变更由后台线程 scan_output_images 更新缓存后刷新。
+    优先用已扫描驻留的模块级 _cache（scan_output_images 刚跑完），否则回退磁盘缓存
+    （同样带 memo，同一进程内二次读不重新解析 JSON）。
     """
     if not cache_file:
         return []
     key = _dirs_key(dirs) if dirs is not None else None
-    _files, recs = _load_disk_cache(cache_file, key)
+    if key is not None and key in _cache:
+        recs = _cache[key]["recs"]
+    else:
+        _files, recs = _load_disk_cache(cache_file, key)
     out = list(recs.values())
     out.sort(key=lambda r: r.get("_mtime", 0), reverse=True)
     return out
 
 
 def load_cached_groups(cache_file, dirs=None) -> dict:
-    """只读磁盘缓存返回 {group: count}（不枚举目录，启动秒级）。"""
+    """只读磁盘缓存返回 {group: count}（不枚举目录，启动秒级）。
+
+    基于 load_cached_records 的同一份已解析 recs 计数（**不二次解析 JSON**）；
+    group 计数按 (cache_file, dirs) memo 化，多次调用零开销。
+    """
+    if not cache_file:
+        return {}
+    key = _dirs_key(dirs) if dirs is not None else None
+    mkey = _memo_key(cache_file, key)
+    entry = _disk_memo.get(mkey)
+    if entry is not None and entry.get("groups") is not None:
+        return dict(entry["groups"])
     out = {}
     for r in load_cached_records(cache_file, dirs):
         g = r.get("group") or GROUP_ROOT
         out[g] = out.get(g, 0) + 1
+    entry = _disk_memo.get(mkey)
+    if entry is not None:
+        entry["groups"] = out
     return out
 
 
@@ -286,7 +357,16 @@ def thumb_path(key: str, thumb_dir) -> Path:
 
 
 def thumb_path_for_rec(store, rec) -> Path:
-    """按虚拟记录反推其缩略图缓存路径（与 generate_all_thumbs 的 key 一致）。"""
+    """按虚拟记录反推其缩略图缓存路径（与 generate_all_thumbs 的 key 一致）。
+
+    结果按 uid memo 化：避免每个 tile 渲染都做 sha1 + thumb_dir.mkdir（~ms 级
+    磁盘 IO）。uid 对同一记录稳定，目录集合变化时 clear_memos() 一并清空。
+    """
+    uid = rec.get("id")
+    if uid:
+        cached = _thumb_path_cache.get(uid)
+        if cached is not None:
+            return cached
     dh = rec.get("_dir_hash") or ""
     rel_key = rec.get("_rel") or ""
     if not rel_key:
@@ -298,11 +378,20 @@ def thumb_path_for_rec(store, rec) -> Path:
             rel_key = "/".join(parts[idx + 1:])
         except ValueError:
             rel_key = vp.name
-    return thumb_path(f"{dh}/{rel_key}" if dh else rel_key, thumb_dir_for(store))
+    result = thumb_path(f"{dh}/{rel_key}" if dh else rel_key, thumb_dir_for(store))
+    if uid:
+        if len(_thumb_path_cache) > 4000:   # 防无限增长（上限远大于虚拟记录上限）
+            _thumb_path_cache.clear()
+        _thumb_path_cache[uid] = result
+    return result
 
 
 def fast_thumb(src_path: str, dst_path: str, max_side: int = 400) -> bool:
-    """快速缩略图：QImageReader 只解码缩小的尺寸，不加载全图（大图提速数十倍）。"""
+    """快速缩略图：QImageReader 只解码缩小的尺寸，不加载全图（大图提速数十倍）。
+
+    失败返回 False 并记录 warning 日志（含真实异常，供排查损坏/不支持的图片），
+    由调用方决定跳过还是兜底。
+    """
     try:
         from PySide6.QtCore import QSize
         from PySide6.QtGui import QImageReader
@@ -316,9 +405,15 @@ def fast_thumb(src_path: str, dst_path: str, max_side: int = 400) -> bool:
                 reader.setScaledSize(QSize(max(1, int(size.width() * max_side / size.height())), max_side))
         img = reader.read()
         if img.isNull():
+            logger.warning("缩略图生成失败（无法解码，%s）：%s",
+                           reader.errorString() or "unknown error", src_path)
             return False
-        return img.save(dst_path, "JPG", 85)
-    except Exception:
+        if not img.save(dst_path, "JPG", 85):
+            logger.warning("缩略图保存失败：%s -> %s", src_path, dst_path)
+            return False
+        return True
+    except Exception as e:
+        logger.warning("缩略图生成异常：%s（%s）", src_path, e)
         return False
 
 
@@ -326,11 +421,19 @@ def generate_all_thumbs(dirs, thumb_dir, cancel_cb=None, batch_cb=None):
     """后台线程：为所有虚拟记录生成缺失的缩略图。
 
     batch_cb: callback(done, total) 每生成 batch 张回调一次（用于刷新 UI）。
+    幂等：已有有效缩略图的记录直接跳过；失败的记录不生成缩略图文件，下次调用
+    会自动重试（配合 main_window 的链式重启，增量新增文件保证最终被处理）。
     """
     recs = scan_output_images(dirs)   # 用内存/磁盘缓存快速拿记录
     total = len(recs)
     done = 0
+    failed = 0
+    missing_src = 0
     batch = 0
+    try:
+        Path(thumb_dir).mkdir(parents=True, exist_ok=True)   # QImage.save 不自动建目录
+    except Exception:
+        pass
     for r in recs:
         if cancel_cb and cancel_cb():
             return done
@@ -350,7 +453,12 @@ def generate_all_thumbs(dirs, thumb_dir, cancel_cb=None, batch_cb=None):
         key = f"{dh}/{rel_key}" if dh else rel_key
         tp = thumb_path(key, thumb_dir)
         if not tp.exists() or tp.stat().st_size < 100:
+            if not Path(abs_path).is_file():
+                # 记录存在但源文件已被删除/移动：跳过，不阻塞其他文件
+                missing_src += 1
+                continue
             if not fast_thumb(abs_path, str(tp)):
+                failed += 1
                 continue
         done += 1
         batch += 1
@@ -359,6 +467,9 @@ def generate_all_thumbs(dirs, thumb_dir, cancel_cb=None, batch_cb=None):
             batch = 0
     if batch_cb:
         batch_cb(done, total)
+    if failed or missing_src:
+        logger.warning("缩略图生成完成：成功 %s，失败 %s，源缺失 %s（共 %s）",
+                       done, failed, missing_src, total)
     return done
 
 
@@ -390,6 +501,7 @@ def scan_output_images(dirs, cache_file=None, cancel_cb=None) -> list:
                     Path(cache_file).unlink()
                 except Exception:
                     pass
+                _disk_memo.pop(_memo_key(cache_file, key), None)
         state = {"files": files, "recs": recs}
         _cache[key] = state
 
@@ -461,6 +573,137 @@ def scan_output_images(dirs, cache_file=None, cancel_cb=None) -> list:
     recs = list(state["recs"].values())
     recs.sort(key=lambda r: r.get("_mtime", 0), reverse=True)
     return recs
+
+
+def _file_snapshot(dirs) -> dict:
+    """只枚举输出目录树中所有图片文件的 (mtime, size)，不读文件内容。
+
+    v3.9：增量扫描的目录快照——仅 os.scandir 目录项读取（不解析 PNG 元数据、
+    不读文件体），4877 图目录树枚举 <1s，远轻于全量解析（~40s）。
+    key 为 {目录哈希}/{相对路径}（与 scan_output_images / 磁盘缓存一致）。
+    """
+    dirs = normalize_output_dirs(dirs)
+    if not dirs:
+        return {}
+    hashes = _dir_hashes(dirs)
+    out = {}
+    for d in dirs:
+        dh = hashes[d]
+        root = Path(d)
+        if not root.is_dir():
+            continue
+        try:
+            stack = [root]
+            while stack:
+                cur = stack.pop()
+                with os.scandir(cur) as it:
+                    for e in it:
+                        try:
+                            if e.is_dir(follow_symlinks=False):
+                                stack.append(Path(e.path))
+                            elif e.is_file(follow_symlinks=False):
+                                name = e.name
+                                if name.lower().endswith(tuple(IMAGE_EXTS)) \
+                                        and not name.endswith(".part"):
+                                    rel = Path(e.path).relative_to(root).as_posix()
+                                    st = e.stat()
+                                    out[f"{dh}/{rel}"] = [st.st_mtime, st.st_size]
+                        except OSError:
+                            continue
+        except OSError:
+            continue
+    return out
+
+
+def scan_output_images_delta(dirs, cache_file=None, cancel_cb=None) -> dict:
+    """增量扫描输出文件夹：只解析新增/变化文件，不重扫已有（省磁盘读写、0 卡顿）。
+
+    v3.9：定时监听用——对比磁盘缓存（files+recs）与当前目录快照 diff：
+    - 新增（快照有、缓存无）→ 后台并行解析元数据（复用 _build_records_parallel，
+      只处理新增文件，避免重复解析已有文件）
+    - 删除/移动（快照无、缓存有）→ 从缓存移除
+    - mtime/size 变化 → 重新解析该文件
+    仅当有变化才写回磁盘缓存；无变化返回空结果不写盘（真正 0 开销）。
+    无磁盘缓存/缓存失配 → 退化为全量 scan_output_images 并返回其结果。
+
+    返回 {"added": n, "removed": n, "changed": n, "records": [...]}；
+    records 为本次新增/变化的记录列表（供调用方 reload）。
+    """
+    dirs = normalize_output_dirs(dirs)
+    if not dirs:
+        return {"added": 0, "removed": 0, "changed": 0, "records": []}
+    key = _dirs_key(dirs)
+    # 读磁盘缓存作为已知集（以磁盘为准，与内存缓存解耦；写回时同步内存缓存）
+    files, recs = ({}, {})
+    if cache_file:
+        files, recs = _load_disk_cache(cache_file, key)
+    if not files and not recs:
+        # 无缓存/缓存失配：退化为全量扫描（行为与 scan_output_images 一致）
+        full = scan_output_images(dirs, cache_file, cancel_cb)
+        return {"added": len(full), "removed": 0, "changed": 0,
+                "records": full, "full": True}
+
+    current = _file_snapshot(dirs)
+    hashes = _dir_hashes(dirs)
+    display_names = _display_names(dirs)
+    hash_to_dir = {h: d for d, h in hashes.items()}
+
+    # 1. diff：新增（快照有、缓存无）+ 变化（mtime/size 不同）
+    added_keys = []
+    changed_tasks = []   # (key, dir, rel, mtime, size)
+    for k in sorted(current):
+        if cancel_cb and cancel_cb():
+            return {"added": 0, "removed": 0, "changed": 0, "records": []}
+        mtime, size = current[k]
+        prev = files.get(k)
+        if prev is None:
+            added_keys.append(k)
+        elif prev != [mtime, size]:
+            dh, rel = k.split("/", 1)
+            d = hash_to_dir.get(dh)
+            if d is not None:
+                changed_tasks.append((k, d, rel, mtime, size))
+
+    # 2. 删除/移动：快照无、缓存有
+    removed_keys = [k for k in files if k not in current]
+    removed = len(removed_keys)
+
+    # 3. 并行解析新增/变化文件（只处理这些，已有文件零重复解析）
+    tasks = []
+    for k in added_keys:
+        dh, rel = k.split("/", 1)
+        d = hash_to_dir.get(dh)
+        if d is None:
+            continue
+        mtime, size = current[k]
+        tasks.append((k, d, rel, mtime, size))
+    tasks.extend(changed_tasks)
+
+    parsed = _build_records_parallel(tasks, dirs, display_names, cancel_cb) if tasks else {}
+    for k, _d, _rel, mtime, size in tasks:
+        if k in parsed:
+            recs[k] = parsed[k]
+            files[k] = [mtime, size]
+
+    changed = len(removed_keys) > 0 or bool(parsed)
+    if changed:
+        for k in removed_keys:
+            files.pop(k, None)
+            recs.pop(k, None)
+        if cache_file:
+            _save_disk_cache(cache_file, files, recs, key)
+        # 同步内存缓存：load_cached_records 优先读 _cache，避免全量扫描后的
+        # 旧 state 覆盖磁盘缓存的新内容（gallery reload 直接读到新记录）
+        state = _cache.get(key)
+        if state is None:
+            state = {"files": {}, "recs": {}}
+            _cache[key] = state
+        state["files"] = files
+        state["recs"] = recs
+
+    new_records = [parsed[t[0]] for t in tasks if t[0] in parsed]
+    return {"added": len(added_keys), "removed": removed, "changed": len(changed_tasks),
+            "records": new_records}
 
 
 def _build_virtual_record(root: Path, rel: str, mtime: float,

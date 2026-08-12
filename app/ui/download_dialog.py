@@ -1,5 +1,4 @@
 """下载相关对话框：类型选择对话框（其他模型）。"""
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
                                QPushButton)
 

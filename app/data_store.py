@@ -18,6 +18,13 @@ def _ts() -> str:
     return time.strftime("%Y%m%d_%H%M%S")
 
 
+# 进程内 settings.json 缓存：{str(path): {"data": dict, "mtime": (st_mtime_ns, st_size)}}
+# load_setting 命中直接返回，避免每次读盘解析 JSON（启动多次 load_setting 各 ~1ms）；
+# save_setting 写盘后同步更新缓存；外部改写（如 i18n.set_language 直写文件）经
+# mtime 校验自动失效重读，保证返回类型与语义与原来一致。
+_SETTINGS_CACHE = {}
+
+
 def normalize_record(rec: dict) -> dict:
     """记录字段规范化：补齐新字段 models[]/base_model，并兼容迁移旧数据。"""
     if not isinstance(rec, dict):
@@ -172,30 +179,54 @@ class DataStore:
     def settings_path(self) -> Path:
         return self.root / "settings.json"
 
+    def _read_settings(self) -> dict:
+        """读取 settings.json 内容（进程内缓存 + mtime 校验）。"""
+        p = self.settings_path()
+        sp = str(p)
+        try:
+            st = p.stat()
+            mt = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            _SETTINGS_CACHE.pop(sp, None)
+            return {}
+        cached = _SETTINGS_CACHE.get(sp)
+        if cached is not None and cached.get("mtime") == mt:
+            return cached["data"]
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        _SETTINGS_CACHE[sp] = {"data": data, "mtime": mt}
+        return data
+
+    def _cache_settings(self, data: dict):
+        """save_setting 写盘后同步缓存（避免下次 load 重读）。"""
+        try:
+            st = self.settings_path().stat()
+            mt = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            mt = None
+        _SETTINGS_CACHE[str(self.settings_path())] = {"data": data, "mtime": mt}
+
     def load_setting(self, key: str, default=None):
         try:
-            if self.settings_path().exists():
-                data = json.loads(self.settings_path().read_text(encoding="utf-8"))
-                val = data.get(key, default)
-                if key == "civitai_api_key" and isinstance(val, str):
-                    from app.crypto_util import unprotect
-                    return unprotect(val)
-                return val
+            data = self._read_settings()
+            val = data.get(key, default)
+            if key == "civitai_api_key" and isinstance(val, str):
+                from app.crypto_util import unprotect
+                return unprotect(val)
+            return val
         except Exception:
             pass
         return default
 
     def save_setting(self, key: str, value):
         try:
-            data = {}
-            if self.settings_path().exists():
-                data = json.loads(self.settings_path().read_text(encoding="utf-8"))
+            data = self._read_settings()
             if key == "civitai_api_key" and isinstance(value, str):
                 from app.crypto_util import protect
                 value = protect(value)
             data[key] = value
             self.settings_path().write_text(
                 json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._cache_settings(data)
         except Exception:
             pass
 

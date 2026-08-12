@@ -5,22 +5,27 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
                                QPlainTextEdit, QPushButton, QScrollArea, QWidget,
-                               QComboBox, QApplication, QFrame, QMessageBox)
+                               QComboBox, QFrame, QMessageBox)
 
 from app.config import APP_NAME
 from app.thumbs import load_pixmap
-from app.filters import ratio_text
 from app.civitai import BASE_MODEL_GROUPS
+from app.text_clean import safe_copy_to_clipboard
 
 MODEL_TYPE_CHOICES = [tr("大模型"), "LoRA", tr("嵌入"), tr("VAE"), tr("超网络"), tr("ControlNet"),
                       tr("放大模型"), tr("工作流"), tr("运动模块"), tr("文本编码器"), tr("其他")]
 
 
-def copy_text(text: str) -> bool:
+def copy_text(text: str) -> tuple[bool, int]:
+    """复制文本到剪贴板（自动清理无效控制字符）。
+
+    Returns:
+        (ok, removed_count)：ok=是否写入成功；removed_count=清理掉的
+        无效控制字符数（>0 时用于提示用户）。
+    """
     if not text:
-        return False
-    QApplication.clipboard().setText(text)
-    return True
+        return False, 0
+    return safe_copy_to_clipboard(text)
 
 
 class DetailDialog(QDialog):
@@ -219,10 +224,25 @@ class DetailDialog(QDialog):
         self._load_image()
 
     def _load_image(self):
-        if self.image_path:
-            pm = load_pixmap(self.image_path, 560)
-            if not pm.isNull():
-                self.img_label.setPixmap(pm)
+        src = self.image_path
+        if not src:
+            return
+        # 虚拟记录（ComfyUI 输出引用）：优先用 comfy_output 缩略图缓存（400px jpg
+        # ~5ms），无缩略图才回退原图（大 PNG 全解码 100-300ms）；「打开原图」按钮
+        # 仍用 self.image_path 打开原始文件。
+        if self.record.get("is_virtual"):
+            try:
+                store = getattr(self.parent(), "store", None)
+                if store is not None:
+                    from app.comfy_output import thumb_path_for_rec
+                    tp = thumb_path_for_rec(store, self.record)
+                    if tp.exists() and tp.stat().st_size >= 100:
+                        src = str(tp)
+            except Exception:
+                pass
+        pm = load_pixmap(src, 560)
+        if not pm.isNull():
+            self.img_label.setPixmap(pm)
 
     def _open_image(self):
         if self.image_path:
@@ -314,8 +334,12 @@ class DetailDialog(QDialog):
                 parts.append(" ".join(meta))
         text = "\n".join(parts).strip()
         if text:
-            QApplication.clipboard().setText(text)
-            self._flash(self.copy_all if with_meta else self.copy_pos, tr("已复制 ✓"))
+            ok, removed = copy_text(text)
+            msg = tr("已复制 ✓")
+            if removed:
+                msg = f"{msg} {tr_format('已清理 {n} 个不可见字符', n=removed)}"
+            self._flash(self.copy_all if with_meta else self.copy_pos,
+                        msg if ok else tr("没有内容可复制"))
         else:
             self._flash(self.copy_all if with_meta else self.copy_pos, tr("无内容"))
 

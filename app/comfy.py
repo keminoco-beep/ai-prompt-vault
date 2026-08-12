@@ -8,10 +8,10 @@
 import re
 from pathlib import Path
 
-import requests
-
 from app import civitai
 from app.i18n import t as tr, tr_format
+
+# 注意：requests 为懒加载（download_file 内 import），避免启动时拖入 requests 链。
 
 # 模型类型（软件内中文 key）→ ComfyUI models/ 标准子目录
 COMIFY_MODEL_DIRS = {
@@ -75,22 +75,6 @@ def available_subdirs(comfyui_dir) -> list:
     if not m.is_dir():
         return []
     return sorted([p.name for p in m.iterdir() if p.is_dir()])
-
-
-def pick_ext(url: str, fallback: str = ".safetensors") -> str:
-    """从 URL 推断扩展名。"""
-    name = (url or "").split("?")[0].lower()
-    for ext in MODEL_EXTENSIONS:
-        if name.endswith(ext):
-            return ext
-    # Civitai 下载链接常带 ?filename=xxx.safetensors
-    m = re.search(r"filename=([^&]+)", url or "")
-    if m:
-        fn = m.group(1).lower()
-        for ext in MODEL_EXTENSIONS:
-            if fn.endswith(ext):
-                return ext
-    return fallback
 
 
 def resolve_download_url(model_url: str, timeout: float = 15.0) -> str:
@@ -191,6 +175,7 @@ def download_file(url: str, dest: Path, progress_cb=None, cancel_cb=None, pause_
     - 失败时把原因追加到 Library/download_errors.log（便于排查）
     返回 (ok, message)。
     """
+    import requests   # 懒加载：仅实际下载时才引入 requests 链
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")

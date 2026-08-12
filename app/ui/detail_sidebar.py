@@ -3,11 +3,11 @@ from app.i18n import t as tr, tr_format
 from PySide6.QtCore import Qt, QUrl, QTimer
 from PySide6.QtGui import QPixmap, QDesktopServices
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-                               QPushButton, QSizePolicy, QTextEdit, QScrollArea,
-                               QApplication)
+                               QPushButton, QSizePolicy, QTextEdit, QScrollArea)
 
 from app.filters import ratio_text
 from app.thumbs import load_pixmap
+from app.text_clean import safe_copy_to_clipboard
 
 
 def elide_middle(text: str, width: int, fm) -> str:
@@ -17,11 +17,16 @@ def elide_middle(text: str, width: int, fm) -> str:
     return fm.elidedText(text, Qt.ElideMiddle, max(width, 40))
 
 
-def _copy(text: str) -> bool:
+def _copy(text: str) -> tuple[bool, int]:
+    """复制文本到剪贴板（自动清理无效控制字符）。
+
+    Returns:
+        (ok, removed_count)：ok=是否写入成功；removed_count=清理掉的
+        无效控制字符数（>0 时用于提示用户）。
+    """
     if not text:
-        return False
-    QApplication.clipboard().setText(text)
-    return True
+        return False, 0
+    return safe_copy_to_clipboard(text)
 
 
 class DetailSidebar(QWidget):
@@ -74,10 +79,12 @@ class DetailSidebar(QWidget):
         self.lay.setSpacing(6)
         scroll.setWidget(inner)
 
-        # 缩略图：缩小高度，让更多内容在低分辨率屏内可见
+        # 大图预览：高度自适应（宽 360，高 140~420），水平 Ignored 保证图片缩放不撑破布局
         self.img_label = QLabel()
         self.img_label.setAlignment(Qt.AlignCenter)
-        self.img_label.setFixedHeight(160)
+        self.img_label.setMinimumHeight(140)
+        self.img_label.setMaximumHeight(420)
+        self.img_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         self.img_label.setText(tr("选择图片查看详情"))
         self.lay.addWidget(self.img_label)
         self._apply_theme_style()
@@ -86,7 +93,6 @@ class DetailSidebar(QWidget):
         self.title_label.setObjectName("popupTitle")
         self.title_label.setWordWrap(True)
         self.title_label.setMinimumWidth(0)
-        from PySide6.QtWidgets import QSizePolicy
         self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.lay.addWidget(self.title_label)
 
@@ -197,28 +203,12 @@ class DetailSidebar(QWidget):
 
         if not rec:
             self._record = None
-            self.img_label.setText(tr("选择图片查看详情"))
-            self.img_label.setPixmap(QPixmap())
+            self._set_img(None, placeholder=tr("选择图片查看详情"))
             self.title_label.setText(tr("(未选中)"))
             return
 
         self._record = rec
-
-        # 缩略图（缩略优先，无则原图）
-        pm = None
-        if rec.get("thumb_file"):
-            pm = load_pixmap(str(self.store.thumbs_dir / rec["thumb_file"]), 360)
-        if (pm is None or pm.isNull()) and rec.get("image_file"):
-            pm = load_pixmap(str(self.store.images_dir / rec["image_file"]), 360)
-        if (pm is None or pm.isNull()) and rec.get("virtual_path"):
-            pm = load_pixmap(str(rec["virtual_path"]), 360)
-        if pm and not pm.isNull():
-            scaled = pm.scaled(360, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.img_label.setPixmap(scaled)
-            self.img_label.setText("")
-        else:
-            self.img_label.setPixmap(QPixmap())
-            self.img_label.setText(tr("(无图片)"))
+        self._set_img(rec)
 
         title = rec.get("title") or tr("(无标题)")
         # 超长文件名中间截断显示，悬停显示完整
@@ -280,6 +270,55 @@ class DetailSidebar(QWidget):
             self.src_label.setVisible(False)
             self.src_btn.setVisible(False)
 
+    # ---------- 悬停预览 ----------
+    def set_preview(self, rec):
+        """仅更新大图预览（列表模式悬停表格行时调用），不改动任何详情文本/控件。
+
+        与 set_record 区分：set_record 更新全部详情；set_preview 只切换 img_label，
+        已有选中记录（self._record）保持不变，clear_preview 时恢复其大图。
+        """
+        self._set_img(rec)
+
+    def clear_preview(self):
+        """清除预览态：恢复显示当前选中记录的大图；无选中记录时恢复占位。"""
+        if self._record is not None:
+            self._set_img(self._record)
+        else:
+            self._set_img(None, placeholder=tr("选择图片查看详情"))
+
+    def _set_img(self, rec, placeholder=None):
+        """加载并显示 rec 的大图预览（等比缩放：宽上限 360、高上限 1000，靠控件最大高度约束）。
+
+        取图顺序：thumb_file → image_file → virtual_path/thumb_path_for_rec 兜底。
+        加载失败或 rec 为 None 时显示 placeholder（默认 tr("暂无图片")）。
+        """
+        if placeholder is None:
+            placeholder = tr("暂无图片")
+        pm = None
+        if rec:
+            if rec.get("thumb_file"):
+                pm = load_pixmap(str(self.store.thumbs_dir / rec["thumb_file"]), 360)
+            if (pm is None or pm.isNull()) and rec.get("image_file"):
+                pm = load_pixmap(str(self.store.images_dir / rec["image_file"]), 360)
+            if (pm is None or pm.isNull()) and rec.get("virtual_path"):
+                tp = None
+                try:
+                    from app.comfy_output import thumb_path_for_rec
+                    tp = thumb_path_for_rec(self.store, rec)
+                except Exception:
+                    tp = None
+                if tp and tp.exists() and tp.stat().st_size >= 100:
+                    pm = load_pixmap(str(tp), 360)
+                if pm is None or pm.isNull():
+                    pm = load_pixmap(str(rec["virtual_path"]), 360)
+        if pm and not pm.isNull():
+            scaled = pm.scaled(360, 1000, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.img_label.setPixmap(scaled)
+            self.img_label.setText("")
+        else:
+            self.img_label.setPixmap(QPixmap())
+            self.img_label.setText(placeholder)
+
     # ---------- 内部 ----------
     def _add_chip(self, text, accent=False):
         lb = QLabel(text)
@@ -337,10 +376,11 @@ class DetailSidebar(QWidget):
             return
         pos = rec.get("positive") or ""
         if which == "positive":
-            self._flash(tr("已复制 ✓") if _copy(pos) else tr("没有内容可复制"))
+            self._flash(self._copy_feedback(_copy(pos), bool(pos)))
             return
         if which == "negative":
-            self._flash(tr("已复制 ✓") if _copy(rec.get("negative") or "") else tr("没有内容可复制"))
+            neg = rec.get("negative") or ""
+            self._flash(self._copy_feedback(_copy(neg), bool(neg)))
             return
         parts = [pos]
         neg = rec.get("negative") or ""
@@ -364,7 +404,25 @@ class DetailSidebar(QWidget):
         if meta:
             parts.append(" ".join(meta))
         text = "\n".join(parts).strip()
-        self._flash(tr("已复制 ✓") if _copy(text) else tr("没有内容可复制"))
+        self._flash(self._copy_feedback(_copy(text), bool(text)))
+
+    def _copy_feedback(self, result: tuple[bool, int], has_content: bool) -> str:
+        """根据复制结果构造用户反馈文案。
+
+        - 成功：显示「已复制 ✓」，若清理过控制字符则追加「已清理 N 个不可见字符」。
+        - 失败：无可见内容提示「没有内容可复制」；有内容但写入失败时提示
+          「复制失败：{err}」（底层 safe_copy_to_clipboard 已捕获剪贴板异常，
+          无法透传具体 err，此处给出通用失败信息，正常流程不会走到）。
+        """
+        ok, removed = result
+        if ok:
+            msg = tr("已复制 ✓")
+            if removed:
+                msg = f"{msg} {tr_format('已清理 {n} 个不可见字符', n=removed)}"
+            return msg
+        if not has_content:
+            return tr("没有内容可复制")
+        return tr_format("复制失败：{err}", err="write failed")
 
     def _flash(self, msg: str):
         """在状态条显示反馈，2 秒后自动隐藏。"""

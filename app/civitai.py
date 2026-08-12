@@ -11,16 +11,15 @@
 - 模型/版本链接：走官方 API /api/v1/models/{id} 与 /model-versions/{id}。
 请求先试 civitai.com，失败自动切换到 civitai.red。
 """
-import html as html_mod
 import json
 import re
 import time
 from pathlib import Path
-from urllib.parse import urlparse
-
-import requests
 
 from app.i18n import t as tr, tr_format
+
+# 注意：requests 为懒加载（仅 _get / download_image / download_video 内 import），
+# 避免启动时拖入 requests→urllib3→charset_normalizer 全链（实测 import 链 147ms）。
 
 UA = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -118,7 +117,8 @@ def parse_link(text: str):
 
 
 # ---------------- 基础请求（双域名容错） ----------------
-def _get(host: str, path: str, timeout: float) -> requests.Response:
+def _get(host: str, path: str, timeout: float):
+    import requests   # 懒加载：仅网络请求时才引入 requests 链
     r = requests.get(f"https://{host}/{path}", headers=UA, timeout=timeout)
     r.raise_for_status()
     return r
@@ -347,19 +347,6 @@ def build_record_from_civitai(info: dict, source_url: str) -> dict:
 
 
 # ---------------- 图片链接：解析网页内嵌数据 ----------------
-def _extract_og_image(html: str) -> str:
-    for pat in (
-        r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"',
-        r'<meta[^>]+content="([^"]+)"[^>]+property="og:image"',
-    ):
-        m = re.search(pat, html, re.I)
-        if m:
-            url = html_mod.unescape(m.group(1)).strip()
-            if url and not url.endswith("/api/og"):
-                return url
-    return ""
-
-
 def _widen_image_url(url: str, width: int = 0) -> str:
     """把 CDN 缩略尺寸（如 width=450）改成适合保存原图的大尺寸。"""
     if "image.civitai" not in url:
@@ -626,6 +613,7 @@ def swap_image_host(url: str) -> str:
 
 def download_image(url: str, dest: str, timeout: float = 30.0) -> tuple:
     """下载图片到 dest，返回 (ok, message)。先原地址，失败切换 image 域名重试。"""
+    import requests   # 懒加载
     candidates = [url] if url else []
     swapped = swap_image_host(url)
     if swapped != url and swapped not in candidates:
@@ -668,6 +656,7 @@ def _is_valid_image(path) -> bool:
 
 def download_video(url: str, dest: str, timeout: float = 60.0) -> tuple:
     """下载视频到 dest，返回 (ok, message)。先原地址，失败切换域名重试。"""
+    import requests   # 懒加载
     candidates = [url] if url else []
     swapped = url.replace("video.civitai.com", "video.civitai.red") \
                  .replace("video.civitai.red", "video.civitai.com")

@@ -30,8 +30,8 @@ def _run_diag() -> int:
         log.append(f"requests: {requests.__version__}")
         log.append(f"certifi: {requests.certs.where()}")
         log.append(f"certifi exists: {Path(requests.certs.where()).exists()}")
-        import urllib3, idna, charset_normalizer
-        log.append(f"urllib3: {urllib3.__version__} | idna ok | charset_normalizer ok")
+        import urllib3
+        log.append(f"urllib3: {urllib3.__version__}")
         for host in civitai.HOSTS:
             try:
                 r = requests.get(f"https://{host}/images/132699963",

@@ -105,8 +105,13 @@ _LANG_TABLES = {
         "已保存 ✓": "Saved ✓",
         "已复制 ✓": "Copied ✓",
         "已复制到剪贴板 ✓": "Copied to clipboard ✓",
+        "已清理 {n} 个不可见字符": "Removed {n} invisible character(s)",
+        "复制失败：{err}": "Copy failed: {err}",
         "没有可复制的内容": "Nothing to copy",
         "没有可保存的完整项（缺图片）": "No complete item to save (missing image)",
+        "有 {n} 条仍在导入中，已跳过": "{n} item(s) still importing, skipped",
+        "有 {n} 条无图片，已跳过": "{n} item(s) without an image, skipped",
+        "请等待导入完成": "Please wait for the import to finish",
         "清空 {len(self.pending)} 条待保存内容？（已保存到资料库的记录不受影响）":
             "Clear {len(self.pending)} pending item(s)? (Saved records are not affected)",
         "已清空": "Cleared",
@@ -153,6 +158,7 @@ _LANG_TABLES = {
         "没有符合条件的图片": "No matching images",
         "去「收藏作品」板块添加例图吧": "Add some images in the Collect panel",
         "试试调整筛选/分组条件": "Try adjusting filters / groups",
+        "暂无图片": "No image",
         "暂无图片\n（右键查看来源）": "No image\n(right-click for source)",
         "（无）": "(none)",
         "未知尺寸": "Unknown size",
@@ -352,6 +358,7 @@ _LANG_TABLES = {
         "时长": "Duration",
         "媒体": "Media",
         "视频：{t}": "Video: {t}",
+        "解析中…": "Resolving...",
         "批量操作（{n} 项）▸": "Batch ({n} items) ▸",
         "批量删除": "Batch delete",
         "批量改分组 ▸": "Move to group ▸",
@@ -386,6 +393,9 @@ _LANG_TABLES = {
         "暗色": "Dark",
         "亮色": "Light",
         "界面主题即时生效。": "The theme applies immediately.",
+        "启用悬浮预览（列表模式）": "Enable hover preview (list view)",
+        "关闭后不再显示悬停预览图，可减少资源占用；设置立即生效。":
+            "Hover preview will be disabled to save resources; applies immediately.",
         "A1111 outputs 目录": "A1111 outputs folder",
         "可选：Automatic1111 输出目录，用于一键导入生成图":
             "Optional: Automatic1111 output folder, for one-click import of generated images",
@@ -427,20 +437,23 @@ _LANG_TABLES = {
         "视频内容异常（{size} 字节）": "Abnormal video content ({size} bytes)",
 
         # ---- v3.3 多输出目录 ----
-        "ComfyUI 输出文件夹": "ComfyUI Output Folders",
-        "选择 ComfyUI 输出文件夹": "Choose ComfyUI output folder",
+        "自动导入文件夹": "Auto-import Folders",
+        "浏览": "Browse",
+        "移除该文件夹": "Remove this folder",
         "添加文件夹": "Add Folder",
-        "移除所选": "Remove Selected",
         "可添加多个输出文件夹，图库将按文件夹自动分组。":
             "You can add multiple output folders; the gallery will auto-group them by folder.",
-        "选择要移除的输出文件夹：": "Choose the output folder to remove:",
-        "请先添加输出文件夹": "Add an output folder first",
         "output 目录已变更，正在后台扫描…":
             "Output folders changed. Scanning in the background...",
 
         # ---- v3.4 幽灵记录标记 / 扫描提示 ----
         "文件缺失": "File Missing",
         "正在后台扫描输出文件夹…": "Scanning output folders in the background...",
+
+        # ---- v3.9 虚拟作品显示上限可配置 ----
+        "限制我的作品显示数量": "Limit number of My Works shown",
+        "我的作品最多显示": "Show at most",
+        "张": " items",
     },
 
     "es": {
@@ -530,8 +543,13 @@ _LANG_TABLES = {
         "已保存 ✓": "Guardado ✓",
         "已复制 ✓": "Copiado ✓",
         "已复制到剪贴板 ✓": "Copiado al portapapeles ✓",
+        "已清理 {n} 个不可见字符": "Se eliminaron {n} carácter(es) invisible(s)",
+        "复制失败：{err}": "Error al copiar: {err}",
         "没有可复制的内容": "Nada que copiar",
         "没有可保存的完整项（缺图片）": "No hay elementos completos para guardar (falta la imagen)",
+        "有 {n} 条仍在导入中，已跳过": "{n} elemento(s) aún importando, omitidos",
+        "有 {n} 条无图片，已跳过": "{n} elemento(s) sin imagen, omitidos",
+        "请等待导入完成": "Espera a que termine la importación",
         "清空 {len(self.pending)} 条待保存内容？（已保存到资料库的记录不受影响）":
             "¿Vaciar {len(self.pending)} elemento(s) pendiente(s)? (Los registros guardados no se ven afectados)",
         "已清空": "Vaciado",
@@ -577,6 +595,7 @@ _LANG_TABLES = {
         "没有符合条件的图片": "No hay imágenes que coincidan",
         "去「收藏作品」板块添加例图吧": "Añade imágenes en el panel Colección",
         "试试调整筛选/分组条件": "Prueba a ajustar filtros / grupos",
+        "暂无图片": "Sin imagen",
         "暂无图片\n（右键查看来源）": "Sin imagen\n(clic derecho para ver origen)",
         "（无）": "(ninguno)",
         "未知尺寸": "Tamaño desconocido",
@@ -772,6 +791,7 @@ _LANG_TABLES = {
         "时长": "Duración",
         "媒体": "Medio",
         "视频：{t}": "Vídeo: {t}",
+        "解析中…": "Analizando...",
         "批量操作（{n} 项）▸": "Lote ({n} elementos) ▸",
         "批量删除": "Eliminación en lote",
         "批量改分组 ▸": "Mover a grupo ▸",
@@ -806,6 +826,9 @@ _LANG_TABLES = {
         "暗色": "Oscuro",
         "亮色": "Claro",
         "界面主题即时生效。": "El tema se aplica inmediatamente.",
+        "启用悬浮预览（列表模式）": "Habilitar vista previa al pasar el cursor (vista de lista)",
+        "关闭后不再显示悬停预览图，可减少资源占用；设置立即生效。":
+            "La vista previa se desactivará para ahorrar recursos; se aplica de inmediato.",
         "A1111 outputs 目录": "Carpeta de outputs de A1111",
         "可选：Automatic1111 输出目录，用于一键导入生成图":
             "Opcional: carpeta de salida de Automatic1111, para importar imágenes generadas con un clic",
@@ -847,20 +870,23 @@ _LANG_TABLES = {
         "视频内容异常（{size} 字节）": "Contenido de vídeo anómalo ({size} bytes)",
 
         # ---- v3.3 多输出目录 ----
-        "ComfyUI 输出文件夹": "Carpetas de salida de ComfyUI",
-        "选择 ComfyUI 输出文件夹": "Elegir la carpeta de salida de ComfyUI",
+        "自动导入文件夹": "Carpetas de importación automática",
+        "浏览": "Examinar",
+        "移除该文件夹": "Eliminar esta carpeta",
         "添加文件夹": "Añadir carpeta",
-        "移除所选": "Quitar seleccionada",
         "可添加多个输出文件夹，图库将按文件夹自动分组。":
             "Puedes añadir varias carpetas de salida; la galería las agrupará automáticamente por carpeta.",
-        "选择要移除的输出文件夹：": "Elige la carpeta de salida a quitar:",
-        "请先添加输出文件夹": "Añade primero una carpeta de salida",
         "output 目录已变更，正在后台扫描…":
             "Las carpetas de salida han cambiado. Escaneando en segundo plano...",
 
         # ---- v3.4 幽灵记录标记 / 扫描提示 ----
         "文件缺失": "Archivo faltante",
         "正在后台扫描输出文件夹…": "Escaneando las carpetas de salida en segundo plano...",
+
+        # ---- v3.9 虚拟作品显示上限可配置 ----
+        "限制我的作品显示数量": "Limitar el número de Mis Obras mostradas",
+        "我的作品最多显示": "Mostrar como máximo",
+        "张": " uds.",
     },
 
     "ja": {
@@ -950,8 +976,13 @@ _LANG_TABLES = {
         "已保存 ✓": "保存しました ✓",
         "已复制 ✓": "コピーしました ✓",
         "已复制到剪贴板 ✓": "クリップボードにコピーしました ✓",
+        "已清理 {n} 个不可见字符": "不可視文字を {n} 個削除しました",
+        "复制失败：{err}": "コピーに失敗しました：{err}",
         "没有可复制的内容": "コピーする内容がありません",
         "没有可保存的完整项（缺图片）": "保存できる完全な項目がありません（画像がありません）",
+        "有 {n} 条仍在导入中，已跳过": "{n} 件はまだインポート中のためスキップしました",
+        "有 {n} 条无图片，已跳过": "{n} 件は画像がないためスキップしました",
+        "请等待导入完成": "インポートが完了するまでお待ちください",
         "清空 {len(self.pending)} 条待保存内容？（已保存到资料库的记录不受影响）":
             "未保存の {len(self.pending)} 件をクリアしますか？（保存済みのレコードには影響しません）",
         "已清空": "クリアしました",
@@ -997,6 +1028,7 @@ _LANG_TABLES = {
         "没有符合条件的图片": "条件に一致する画像がありません",
         "去「收藏作品」板块添加例图吧": "「コレクション」パネルで参考画像を追加しましょう",
         "试试调整筛选/分组条件": "フィルター / グループ条件を調整してみてください",
+        "暂无图片": "画像がありません",
         "暂无图片\n（右键查看来源）": "画像がありません\n（右クリックでソースを表示）",
         "（无）": "（なし）",
         "未知尺寸": "サイズ不明",
@@ -1192,6 +1224,7 @@ _LANG_TABLES = {
         "时长": "再生時間",
         "媒体": "メディア",
         "视频：{t}": "動画：{t}",
+        "解析中…": "解析中...",
         "批量操作（{n} 项）▸": "一括操作（{n} 件）▸",
         "批量删除": "一括削除",
         "批量改分组 ▸": "グループへ移動 ▸",
@@ -1226,6 +1259,9 @@ _LANG_TABLES = {
         "暗色": "ダーク",
         "亮色": "ライト",
         "界面主题即时生效。": "テーマはすぐに反映されます。",
+        "启用悬浮预览（列表模式）": "ホバープレビューを有効にする（リスト表示）",
+        "关闭后不再显示悬停预览图，可减少资源占用；设置立即生效。":
+            "プレビューを無効にしてリソースを節約します。すぐに反映されます。",
         "A1111 outputs 目录": "A1111 outputs フォルダ",
         "可选：Automatic1111 输出目录，用于一键导入生成图":
             "任意：Automatic1111 の出力フォルダ。生成画像のワンクリックインポート用",
@@ -1267,20 +1303,23 @@ _LANG_TABLES = {
         "视频内容异常（{size} 字节）": "動画コンテンツが異常です（{size} バイト）",
 
         # ---- v3.3 多输出目录 ----
-        "ComfyUI 输出文件夹": "ComfyUI出力フォルダ",
-        "选择 ComfyUI 输出文件夹": "ComfyUI出力フォルダを選択",
+        "自动导入文件夹": "自動インポートフォルダー",
+        "浏览": "参照",
+        "移除该文件夹": "このフォルダを削除",
         "添加文件夹": "フォルダを追加",
-        "移除所选": "選択を削除",
         "可添加多个输出文件夹，图库将按文件夹自动分组。":
             "出力フォルダは複数追加できます。ギャラリーはフォルダごとに自動でグループ化します。",
-        "选择要移除的输出文件夹：": "削除する出力フォルダを選択：",
-        "请先添加输出文件夹": "先に出力フォルダを追加してください",
         "output 目录已变更，正在后台扫描…":
             "出力フォルダが変更されました。バックグラウンドでスキャン中...",
 
         # ---- v3.4 幽灵记录标记 / 扫描提示 ----
         "文件缺失": "ファイル欠落",
         "正在后台扫描输出文件夹…": "出力フォルダをバックグラウンドでスキャン中...",
+
+        # ---- v3.9 虚拟作品显示上限可配置 ----
+        "限制我的作品显示数量": "マイ作品の表示数を制限",
+        "我的作品最多显示": "マイ作品の最大表示",
+        "张": " 枚",
     },
 }
 

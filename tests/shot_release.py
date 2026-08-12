@@ -30,7 +30,7 @@ app.setStyleSheet(APP_QSS)
 
 td = tempfile.mkdtemp()
 store = DataStore(Path(td) / "Library")
-i18n.init(store.settings_path(), "zh")
+i18n.init(store.settings_path(), "en")   # 英文界面截图（GitHub 国际展示）
 
 # 造 6 张渐变测试图（不同配色，避免截图全是同色）
 grads = [
@@ -48,12 +48,12 @@ for i, (c1, c2) in enumerate(grads):
     f = store.images_dir / f"img_{i}.png"
     img.save(str(f), "PNG")
     store.add({
-        "id": f"shot_{i}", "title": f"示例作品 {i+1} · Cyberpunk {['City', 'Portrait', 'Landscape'][i % 3]}",
-        "tags": ["示例", "城市", "夜景", "cyberpunk"],
+        "id": f"shot_{i}", "title": f"Sample Art {i+1} · Cyberpunk {['City', 'Portrait', 'Landscape'][i % 3]}",
+        "tags": ["sample", "city", "cyberpunk", "neon"],
         "positive": "night city, neon lights, cinematic, ultra detailed, masterpiece",
         "negative": "blur, lowres, bad anatomy",
         "base_model": ["Krea 2", "Flux.1", "SDXL"][i % 3],
-        "models": [{"name": "Krea2 Turbo_FP8", "type": "大模型", "url": "https://civitai.com/models/1"},
+        "models": [{"name": "Krea2 Turbo_FP8", "type": "Checkpoint", "url": "https://civitai.com/models/1"},
                    {"name": "detail_enhancer", "type": "LoRA", "url": ""}],
         "sampler": "DPM++ 2M", "steps": 28, "cfg": 6.5, "seed": 12345 + i,
         "source": "civitai", "image_file": f"img_{i}.png",

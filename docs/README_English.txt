@@ -1,5 +1,5 @@
 ══════════════════════════════════════════════════════════
-      AI Prompt Vault  v3.1.0
+      AI Prompt Vault  v3.2.0
       Organize your AI art (reference images + prompts + models)
       UI available in 中文 / English / Español / 日本語
 ══════════════════════════════════════════════════════════
@@ -187,6 +187,41 @@ ignored automatically.)
   retry
 
 ──────────────────────────────────────────────
+★ What's New in v3.2.0
+──────────────────────────────────────────────
+This release focuses on polish, reliability and real-time sync
+(all fixes and improvements since v3.1.0):
+
+1. Enlarged hover preview: hovering a row in List view now shows
+   a 360px preview in the right detail sidebar (the old 170px
+   box on the left is gone); Grid view does not show it, and it
+   can be toggled in Settings.
+2. Video resolution: a fully local mp4 parser shows the correct
+   size for imported videos (no more "Unknown").
+3. Collect batch-save fix: after importing multiple links at
+   once, "Save All" keeps each image's own prompt/model instead
+   of merging them; items still importing or without an image
+   are skipped with a notice; trailing CJK punctuation is
+   stripped from URLs.
+4. Configurable "My Works" display cap: limit the number of
+   items shown (default 250, adjustable 50–10000) or disable
+   the limit in Settings.
+5. Real-time incremental updates: a 15-second background delta
+   scan auto-syncs new/deleted/moved images to the gallery and
+   groups — no manual refresh needed; only changed files are
+   processed, so there is zero cost when nothing changed.
+6. No flicker on refresh: refreshing with unchanged data keeps
+   the UI untouched (scroll position and selection preserved).
+7. Missing thumbnails auto-fill: failed thumbnail generations
+   are retried, placeholders are never cached, and real
+   thumbnails swap in as soon as they are ready.
+8. Settings redesign: output folders are listed one per row with
+   open/remove buttons, renamed to the generic "Auto-Import
+   Folders"; the "张" unit no longer sits inside the spinbox.
+9. Smoother mouse-wheel: Grid view scrolls per-pixel instead of
+   jumping one page per tick.
+
+──────────────────────────────────────────────
 3. Data Management
 ──────────────────────────────────────────────
 All data is stored automatically in the Library subfolder next
@@ -238,7 +273,24 @@ to the exe (created on first run; an old Chinese-named
 ──────────────────────────────────────────────
 5. Version History
 ──────────────────────────────────────────────
-v3.1.0  (current release — every improvement since v3.0)
+v3.2.0  (this release — all fixes & improvements since v3.1.0)
+        · Enlarged hover preview (360px in the detail sidebar,
+          toggleable; off in Grid view)
+        · Video resolution (local mp4 parser — no more "Unknown")
+        · Collect batch-save fix (each image keeps its own
+          prompt/model; skips importing/no-image items with a
+          notice; CJK punctuation stripped from URLs)
+        · Configurable "My Works" display cap (default 250,
+          50–10000, or unlimited)
+        · Real-time incremental updates (15s background delta
+          scan; zero cost when nothing changed)
+        · No flicker on refresh (scroll & selection preserved)
+        · Missing thumbnails auto-fill (retried, no cached
+          placeholders, instant swap-in)
+        · Settings redesign (one output folder per row with
+          open/remove buttons; renamed "Auto-Import Folders")
+        · Smoother mouse-wheel (per-pixel grid scrolling)
+v3.1.0  (previous release — every improvement since v3.0)
         · Civitai video link import (download video + extract
           parameters + first-frame thumbnail)
         · Spanish / Japanese UI (four languages)

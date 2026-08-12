@@ -1,3 +1,4 @@
+# 运行时依赖（打包：pip install pyinstaller；build.py 会构建期临时裁剪 PySide6 无用 Qt 二进制以瘦身，构建后自动恢复）
 PySide6>=6.6
 PySide6-Addons>=6.6
 requests>=2.31
