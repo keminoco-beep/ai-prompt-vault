@@ -36,6 +36,7 @@ jobs:
       - name: Build exe
         shell: pwsh
         run: |
+          $env:PYTHONIOENCODING = 'utf-8'
           python -c "import sys, PySide6, PyInstaller; print('py', sys.version.split()[0], '| PySide6', PySide6.__version__, '| PyInstaller', PyInstaller.__version__)"
           python build.py 2>&1 | Tee-Object -FilePath build_log.txt
           if ($LASTEXITCODE -ne 0) {

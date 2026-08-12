@@ -177,6 +177,12 @@ def _restore_pyside6() -> None:
 
 
 def main() -> int:
+    # CI/Windows 下 stdout/stderr 默认 cp1252，打印中文会 UnicodeEncodeError（历史复发坑）
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     # 崩溃恢复：上次构建若异常中断，先移回残留备份，再清理 build/（避免误删备份）
     _restore_pyside6()
 
