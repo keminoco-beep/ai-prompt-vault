@@ -1,5 +1,5 @@
-from app.i18n import t as tr, tr_format, rev
 """收藏面板：拖拽/粘贴图片、Civitai 链接导入、提示词与模型表单。"""
+from app.i18n import t as tr, tr_format, rev
 import re
 import uuid
 
@@ -15,9 +15,16 @@ from app.thumbs import image_size, load_pixmap, rounded_pixmap, make_thumbnail
 from app.workers import Worker, WorkerSignals
 
 # 模型清单中每行可选的类型（含 Civitai 常见类型的中文标签）
+# 注意：保持模块级冻结中文 key 是有意为之 —— 存储值是中文 key，
+# 显示时再 tr() 一次即可本地化（见 _add_model_row）。
 MODEL_TYPE_CHOICES = [tr("大模型"), "LoRA", tr("嵌入"), tr("VAE"), tr("超网络"), tr("ControlNet"),
                       tr("放大模型"), tr("工作流"), tr("运动模块"), tr("文本编码器"), tr("其他")]
-PLACEHOLDER_TEXT = tr("把网页上的例图直接拖到这里\n\n或按 Ctrl+V 粘贴剪贴板里的图片\n\n也支持拖入 / 粘贴 Civitai 链接，自动提取提示词与全部模型")
+# v4.2（Bug 修复）：PLACEHOLDER_TEXT 不能在模块级 tr() —— 模块在 i18n.init()
+# 之前被 import，语言永远是 zh，导致英文界面拖拽区仍显示中文。
+# 改为保留 zh 原文 key，构造 DropZone 时再 tr() 本地化。
+PLACEHOLDER_TEXT_KEY = ("把网页上的例图直接拖到这里\n\n"
+                        "或按 Ctrl+V 粘贴剪贴板里的图片\n\n"
+                        "也支持拖入 / 粘贴 Civitai 链接，自动提取提示词与全部模型")
 
 
 def _placeholder_pixmap(size: int) -> QPixmap:
@@ -66,7 +73,7 @@ class DropZone(QFrame):
         self.apply_theme_style()
         lay = QVBoxLayout(self)
         lay.setSpacing(4)
-        self.text = QLabel(PLACEHOLDER_TEXT)
+        self.text = QLabel(tr(PLACEHOLDER_TEXT_KEY))
         self.text.setObjectName("dzText")
         self.text.setAlignment(Qt.AlignCenter)
         lay.addStretch(1)

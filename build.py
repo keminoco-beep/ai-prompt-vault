@@ -206,6 +206,12 @@ def main() -> int:
            "--optimize", "1", "--noupx"]
     for mod in EXCLUDE:
         cmd.append(f"--exclude-module={mod}")
+    # v4.1：把 AI 设计 logo PNG 打包进 exe 的 app/ 子目录（与开发模式路径一致）。
+    # 运行时 MainWindow._load_app_icon / TitleBar._load_logo_pixmap 通过
+    # app_icon_png_path() 找到 sys._MEIPASS/app/app_icon.png。
+    png_asset = ROOT / "app" / "app_icon.png"
+    if png_asset.is_file():
+        cmd.append(f"--add-data={png_asset};app")
     # include OpenSSL DLLs if present (required by requests on some runtimes)
     for dll in ("libssl-3-x64.dll", "libcrypto-3-x64.dll"):
         p = find_dll(dll)

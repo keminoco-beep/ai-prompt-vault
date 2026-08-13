@@ -4,7 +4,7 @@ from pathlib import Path
 
 # 软件名（中英界面统一显示此名）
 APP_NAME = "AI-Prompt-Vault"
-VERSION = "3.2.0"
+VERSION = "3.2.1"
 
 # 资料库文件夹名：固定英文，不随界面语言变化（避免切换语言找不到数据）。
 # 旧版中文名「资料库」会在首次启动时自动迁移（见 library_dir）。
@@ -17,6 +17,20 @@ def app_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent
+
+
+def app_icon_png_path() -> Path:
+    """运行时定位 app/app_icon.png（v4.1 AI 生成 logo）。
+
+    开发模式：app/app_icon.png（项目根的 app/ 子目录）。
+    打包模式（PyInstaller --onefile + --add-data=app/app_icon.png;app）：
+    文件被解压到 sys._MEIPASS/app/app_icon.png。
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    else:
+        base = app_dir()
+    return base / "app" / "app_icon.png"
 
 
 def library_dir() -> Path:

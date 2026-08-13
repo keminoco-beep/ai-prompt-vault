@@ -1,11 +1,14 @@
 import logging
+import sys
+from pathlib import Path
+
 from app.i18n import t as tr, tr_format
 """主窗口：侧边栏导航 + 分组区 + 收藏/浏览两个板块 + 全局粘贴快捷键。"""
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QEvent, QPoint
 
 logger = logging.getLogger(__name__)
 from PySide6.QtGui import (QKeySequence, QShortcut, QPainter, QPixmap,
-                           QColor, QFont, QBrush, QLinearGradient)
+                           QColor, QFont, QBrush, QLinearGradient, QIcon)
 from PySide6.QtCore import QRectF
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QStackedWidget, QButtonGroup, QLineEdit,
@@ -13,7 +16,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, Q
                                QTreeWidget, QTreeWidgetItem, QMenu, QInputDialog,
                                QToolButton, QMessageBox)
 
-from app.config import APP_NAME, VERSION
+from app.config import APP_NAME, VERSION, app_icon_png_path
 from app.ui.collect_panel import CollectPanel
 from app.ui.gallery_panel import GalleryPanel
 from app.ui.model_panel import ModelPanel
@@ -30,14 +33,43 @@ class MainWindow(QMainWindow):
     # 无 output dirs 时回调直接 return，不报错；全量/手动刷新后重置计时起点。
     DELTA_SCAN_SECONDS = 15
 
+    # ---------- v4.1 无边框窗口：Windows 原生消息常量 ----------
+    # WM_NCHITTEST：命中测试（边缘拖拽缩放）；WM_GETMINMAXINFO：最大化限制在工作区。
+    WM_NCHITTEST = 0x0084
+    WM_GETMINMAXINFO = 0x0024
+    # v4.3：系统拖拽缩放开始/结束（WM_ENTERSIZEMOVE 切掉圆角/border 防闪烁，
+    # WM_EXITSIZEMOVE 恢复圆角；不再冻结窗口绘制，避免 v4.3 的"窗口不跟指针动"矫枉过正）
+    WM_ENTERSIZEMOVE = 0x0231
+    WM_EXITSIZEMOVE = 0x0232
+    HTCLIENT = 1
+    HTLEFT, HTRIGHT = 10, 11
+    HTTOP, HTTOPLEFT, HTTOPRIGHT = 12, 13, 14
+    HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT = 15, 16, 17
+    # 边缘拖拽缩放热区宽度（px）：非最大化时窗口边缘 6px 支持 8 方向缩放
+    RESIZE_BORDER = 6
+
     def __init__(self, store, output_scan: bool = True):
         super().__init__()
         self.store = store
         self.output_scan = output_scan
+        # v4.1：Windows 用自绘无边框窗口（圆角 + 自绘标题栏 + 边缘拖拽缩放），风格与
+        # 软件 UI 一致；macOS 保持原生边框（无边框在 macOS 行为异常时降级为原生边框，
+        # 保证可编译可运行）。nativeEvent 逻辑同样用 sys.platform 保护。
+        self._frameless = sys.platform == "win32"
+        if self._frameless:
+            self.setWindowFlags(Qt.FramelessWindowHint)
+            # 透明背景以支持圆角（windowShell 绘制圆角背景，四角之外透明）
+            self.setAttribute(Qt.WA_TranslucentBackground)
+        self._shell = None
+        self._shell_layout = None
+        self.title_bar = None
+        # v4.3.1：移除 v4.3 的 freeze/unfreeze（v4.3 freeze 让窗口不跟指针动）。
+        # 缩放期间通过 QSS 属性 #windowShell[windowResizing="true"] 去圆角/border，
+        # 消除 resize 时圆角抗锯齿频繁重算的闪烁；窗口始终正常重绘，实时跟随指针。
         self.setWindowTitle(tr(APP_NAME))
         self.resize(1240, 780)
         self.setMinimumSize(1020, 640)
-        self.setWindowIcon(self._make_icon())
+        self.setWindowIcon(self._load_app_icon())
         self._build()
         # 全局 Ctrl+V：焦点不在文本输入框时，把剪贴板图片/链接交给收藏面板
         self.paste_shortcut = QShortcut(QKeySequence("Ctrl+V"), self)
@@ -47,10 +79,37 @@ class MainWindow(QMainWindow):
     # ================= UI =================
     def _build(self):
         central = QWidget()
-        root = QHBoxLayout(central)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        self.setCentralWidget(central)
+        if self._frameless:
+            # v4.1 无边框外壳：承载圆角背景与 1px 边框；内层 UI（侧栏 + 内容区）不变。
+            # 布局留 1px 边距让窗口边框可见；最大化时 _sync_window_state 切 0 边距贴屏幕。
+            shell = QWidget()
+            shell.setObjectName("windowShell")
+            # 动态属性：QSS 属性选择器 #windowShell[windowMaximized="true"] 生效依据。
+            # 注：不能用 "maximized"——那是 QWidget 内建只读属性，setProperty 会静默失败。
+            shell.setProperty("windowMaximized", False)
+            # v4.3.1：缩放期间动态属性（windowResizing=true 触发 QSS 去圆角/border，
+            # 消除 resize 时圆角抗锯齿频繁重算的闪烁，不再冻结窗口绘制）
+            shell.setProperty("windowResizing", False)
+            sv = QVBoxLayout(shell)
+            sv.setContentsMargins(1, 1, 1, 1)
+            sv.setSpacing(0)
+            from app.ui.title_bar import TitleBar
+            self.title_bar = TitleBar(shell)
+            sv.addWidget(self.title_bar)
+            body = QWidget()
+            root = QHBoxLayout(body)
+            root.setContentsMargins(0, 0, 0, 0)
+            root.setSpacing(0)
+            sv.addWidget(body, 1)
+            self.setCentralWidget(shell)
+            self._shell = shell
+            self._shell_layout = sv
+        else:
+            # macOS 等非 Windows 平台：保持原生边框（无边框行为异常时降级）
+            root = QHBoxLayout(central)
+            root.setContentsMargins(0, 0, 0, 0)
+            root.setSpacing(0)
+            self.setCentralWidget(central)
 
         # -------- 侧边栏 --------
         side = QWidget()
@@ -60,27 +119,10 @@ class MainWindow(QMainWindow):
         sv.setContentsMargins(14, 18, 14, 12)
         sv.setSpacing(8)
 
-        brand = QHBoxLayout()
-        brand.setSpacing(10)
-        logo = QLabel()
-        logo.setObjectName("logoDot")
-        logo.setFixedSize(36, 36)
-        logo.setAlignment(Qt.AlignCenter)
-        logo.setText(tr("绘"))
-        from app.ui.style import tcolor
-        logo.setStyleSheet(f"font-size:16px; font-weight:700; color:{tcolor('logo_color')};")
-        brand.addWidget(logo)
-        bt = QVBoxLayout()
-        bt.setSpacing(0)
-        bn = QLabel(tr(APP_NAME))
-        bn.setObjectName("brandName")
-        bs = QLabel(tr("例图 · 提示词 · 模型 管理"))
-        bs.setObjectName("brandSub")
-        bt.addWidget(bn)
-        bt.addWidget(bs)
-        brand.addLayout(bt)
-        brand.addStretch(1)
-        sv.addLayout(brand)
+        # v4.1：删除侧栏顶部 brand 布局（logo + 应用名 + 副标题），避免与标题栏
+        # 左上角的 logo+应用名+版本号重复。保留 nav 按钮、Collapse 按钮、
+        # 分组树、打开资料库/下载/设置/版本号（底部 ver 仍在）。下方 8px
+        # 间距给 nav 按钮一个轻量呼吸区。
         sv.addSpacing(8)
 
         self.nav_group = QButtonGroup(self)
@@ -233,6 +275,181 @@ class MainWindow(QMainWindow):
                 pass
         super().closeEvent(event)
 
+    # ================= v4.1 无边框窗口：状态同步 / 边缘缩放 =================
+    def changeEvent(self, event):
+        """窗口状态变化（最大化/还原，含按钮、双击、系统边缘拖拽、快捷键）时：
+        同步 windowShell 的 maximized 属性（QSS 属性选择器生效）与标题栏按钮图标。"""
+        if event.type() == QEvent.WindowStateChange:
+            self._sync_window_state()
+        super().changeEvent(event)
+
+    def _sync_window_state(self):
+        """最大化：shell 去掉圆角/边框/边距（视觉无缝贴屏幕边缘）；
+        还原：恢复圆角外壳。标题栏按钮图标同步。"""
+        shell = getattr(self, "_shell", None)
+        if shell is not None:
+            maximized = self.isMaximized()
+            shell.setProperty("windowMaximized", maximized)
+            try:
+                # 最大化时去掉 1px 布局边距，内容贴满屏幕边缘；还原时恢复
+                if self._shell_layout is not None:
+                    m = 0 if maximized else 1
+                    self._shell_layout.setContentsMargins(m, m, m, m)
+            except Exception:
+                pass
+            try:
+                # repolish：让 QSS 属性选择器 #windowShell[windowMaximized="true"] 立即生效
+                shell.style().unpolish(shell)
+                shell.style().polish(shell)
+                shell.update()
+            except Exception:
+                pass
+        if getattr(self, "title_bar", None) is not None:
+            try:
+                self.title_bar._update_max_icon()
+            except Exception:
+                pass
+
+    def resizeEvent(self, event):
+        """v4.3.1：移除 v4.3 的 freeze/unfreeze 包裹（freeze 会让窗口内容不
+        跟指针动，比闪烁还糟）。改为在 nativeEvent WM_ENTERSIZEMOVE /
+        WM_EXITSIZEMOVE 切 #windowShell 的 windowResizing 属性，通过 QSS
+        在缩放期间去圆角/border，从源头消除圆角抗锯齿频繁重算的闪烁。
+
+        这里只透传到父类，让窗口实时跟随用户拖拽。
+        """
+        super().resizeEvent(event)
+
+    def _on_enter_sizemove(self):
+        """v4.3.1：系统拖拽缩放开始（WM_ENTERSIZEMOVE）—— 给 shell 标
+        windowResizing=true，让 QSS 去掉圆角/border，消除闪烁。
+        窗口内容始终正常重绘，实时跟随指针。
+        """
+        shell = getattr(self, "_shell", None)
+        if shell is None:
+            return
+        try:
+            shell.setProperty("windowResizing", True)
+            # repolish：让 QSS 属性选择器 #windowShell[windowResizing="true"] 立即生效
+            shell.style().unpolish(shell)
+            shell.style().polish(shell)
+            shell.update()
+        except Exception:
+            pass
+
+    def _on_exit_sizemove(self):
+        """v4.3.1：系统拖拽缩放结束（WM_EXITSIZEMOVE）—— 恢复 windowResizing=false，
+        QSS 重新应用圆角外壳。
+        """
+        shell = getattr(self, "_shell", None)
+        if shell is None:
+            return
+        try:
+            shell.setProperty("windowResizing", False)
+            shell.style().unpolish(shell)
+            shell.style().polish(shell)
+            shell.update()
+        except Exception:
+            pass
+
+    def nativeEvent(self, event_type, message):
+        """Windows 无边框窗口的系统消息处理（最稳的边缘缩放方案）：
+
+        - WM_NCHITTEST：窗口边缘 6px 区域返回对应 HT* 常量 → 系统原生拖拽缩放
+          （8 方向：N/S/E/W/NE/NW/SE/SW，自动约束最小尺寸，动画流畅）
+        - WM_GETMINMAXINFO：最大化限制在当前屏幕工作区（不遮挡任务栏）
+        - WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE：切换 shell 的 windowResizing
+          属性（QSS 缩放期间去圆角/border，消除闪烁；不再冻结窗口绘制）
+
+        macOS 上 nativeEvent 不适用：无边框直接降级原生边框，本方法不会被调用；
+        代码仍用 sys.platform 保护，保证跨平台可编译可运行。
+        """
+        if sys.platform != "win32" or not getattr(self, "_frameless", False):
+            return super().nativeEvent(event_type, message)
+        try:
+            import ctypes
+            from ctypes import wintypes
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == self.WM_NCHITTEST:
+                # lParam 低位/高位各为 16 位屏幕坐标（有符号）
+                x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                if self.isMaximized():
+                    return True, self.HTCLIENT   # 最大化时禁用边缘缩放
+                local = self.mapFromGlobal(QPoint(x, y))
+                return True, self._hit_test_edge(local)
+            if msg.message == self.WM_ENTERSIZEMOVE:
+                # v4.3.1：进入系统拖拽缩放 → 切 windowResizing 属性（QSS 去圆角/border）
+                self._on_enter_sizemove()
+                return super().nativeEvent(event_type, message)
+            if msg.message == self.WM_EXITSIZEMOVE:
+                # v4.3.1：缩放结束 → 恢复 windowResizing 属性（QSS 恢复圆角）
+                self._on_exit_sizemove()
+                return super().nativeEvent(event_type, message)
+            if msg.message == self.WM_GETMINMAXINFO:
+                self._apply_work_area_limit(msg.lParam)
+                return True, 0
+        except Exception:
+            pass
+        return super().nativeEvent(event_type, message)
+
+    def _hit_test_edge(self, local) -> int:
+        """根据窗口局部坐标判断所在边缘（8 方向），返回 Windows HT* 常量。"""
+        b = self.RESIZE_BORDER
+        w, h = self.width(), self.height()
+        left = local.x() < b
+        right = local.x() >= w - b
+        top = local.y() < b
+        bottom = local.y() >= h - b
+        if top:
+            if left:
+                return self.HTTOPLEFT
+            if right:
+                return self.HTTOPRIGHT
+            return self.HTTOP
+        if bottom:
+            if left:
+                return self.HTBOTTOMLEFT
+            if right:
+                return self.HTBOTTOMRIGHT
+            return self.HTBOTTOM
+        if left:
+            return self.HTLEFT
+        if right:
+            return self.HTRIGHT
+        return self.HTCLIENT
+
+    def _apply_work_area_limit(self, lparam: int) -> None:
+        """WM_GETMINMAXINFO：把最大化尺寸/位置限制在当前屏幕工作区，并给出最小尺寸。"""
+        import ctypes
+        from ctypes import wintypes
+
+        class MINMAXINFO(ctypes.Structure):
+            _fields_ = [
+                ("ptReserved", wintypes.POINT),
+                ("ptMaxSize", wintypes.POINT),
+                ("ptMaxPosition", wintypes.POINT),
+                ("ptMinTrackSize", wintypes.POINT),
+                ("ptMaxTrackSize", wintypes.POINT),
+            ]
+
+        try:
+            mmi = MINMAXINFO.from_address(lparam)
+            screen = self.screen()
+            if screen is None:
+                return
+            work = screen.availableGeometry()
+            mmi.ptMaxPosition.x = work.x()
+            mmi.ptMaxPosition.y = work.y()
+            mmi.ptMaxSize.x = work.width()
+            mmi.ptMaxSize.y = work.height()
+            # 最小尺寸约束：保证边缘拖拽缩放不小于 setMinimumSize(1020, 640)
+            min_size = self.minimumSize()
+            mmi.ptMinTrackSize.x = max(min_size.width(), 1)
+            mmi.ptMinTrackSize.y = max(min_size.height(), 1)
+        except Exception:
+            pass
+
     def _open_settings(self):
         from app.ui.settings_dialog import SettingsDialog
         dlg = SettingsDialog(self.store, self)
@@ -314,12 +531,13 @@ class MainWindow(QMainWindow):
             self.gallery_panel.sidebar._apply_theme_style()
         except Exception:
             pass
-        # logo 文字颜色
-        for lbl in self.findChildren(QLabel):
-            if lbl.objectName() == "logoDot":
-                from app.ui.style import tcolor
-                lbl.setStyleSheet(f"font-size:16px; font-weight:700; color:{tcolor('logo_color')};")
-                break
+        # v4.1：侧栏顶部 brand 已删除（无 logoDot），标题栏 logo 改为 PNG pixmap
+        # （不随主题变色），故此无需再循环刷新 QLabel 的 QSS 渐变文字色。
+        # v4.2：标题栏窗口按钮为自绘图标，颜色需随主题刷新
+        try:
+            self.title_bar.apply_theme(t)
+        except Exception:
+            pass
 
     def _on_page_changed(self, idx):
         """切页时刷新：模型管理页重扫 ComfyUI；图库页重载虚拟记录（走缓存，秒级）。"""
@@ -789,6 +1007,26 @@ class MainWindow(QMainWindow):
         self.collect_panel.add_from_clipboard()
 
     # ================= 图标 =================
+    @staticmethod
+    def _load_app_icon() -> QIcon:
+        """加载应用图标（v4.1：app/app_icon.png，AI 设计 logo）。
+
+        - 开发模式：从项目根的 app/app_icon.png 读取。
+        - 打包模式（PyInstaller --onefile + --add-data=app/app_icon.png;app）：
+          文件位于 sys._MEIPASS/app/app_icon.png，Qt 自动按多尺寸 PNG 加载。
+        - 加载失败（如 PNG 缺失/损坏）回退到程序生成的渐变 pixmap，保证窗口
+          始终有可见图标，不抛异常阻塞启动。
+        """
+        try:
+            png = app_icon_png_path()
+            if png.is_file():
+                ic = QIcon(str(png))
+                if not ic.isNull():
+                    return ic
+        except Exception:
+            pass
+        return QIcon(MainWindow._make_icon())
+
     @staticmethod
     def _make_icon() -> QPixmap:
         pm = QPixmap(64, 64)

@@ -1,5 +1,5 @@
 ══════════════════════════════════════════════════════════
-      AI Prompt Vault  v3.2.0
+      AI Prompt Vault  v3.2.1
       Organize your AI art (reference images + prompts + models)
       UI available in 中文 / English / Español / 日本語
 ══════════════════════════════════════════════════════════
@@ -9,8 +9,38 @@ A fully offline, standalone Windows tool for collecting and
 organizing AI-generated art: save reference images, auto-extract
 prompts, annotate every model, filter by base model family,
 manage custom groups, and browse your ComfyUI output directly
-in the gallery. Since v3.1.0 the UI supports four languages —
-Chinese, English, Español and 日本語 — switchable at any time.
+in the gallery. The UI supports four languages — Chinese,
+English, Español and 日本語 — switchable at any time.
+
+──────────────────────────────────────────────
+★ Features
+──────────────────────────────────────────────
+· Collect: drag & drop web images, paste with Ctrl+V, or paste
+  a Civitai image / model / video share link for one-click
+  import — prompts, model lists and sampling parameters are
+  extracted automatically, and originals are downloaded
+· Gallery: grid / list views with sorting, multi-filter and
+  keyword search; large hover preview in List view; imported
+  videos show their real resolution
+· My Works: point the app at Auto-Import Folders (e.g. your
+  ComfyUI output) and new images appear in the gallery
+  automatically — no manual refresh; auto-grouped by folder;
+  display cap adjustable in Settings
+· Models: one-click health check of your model folders
+  (corrupt / 0-byte / leftover files flagged), and one-click
+  download of a picture's models straight into ComfyUI's
+  folders
+· Groups: custom groups plus the auto-generated "My Works"
+  group tree — organize by theme with ease
+· Duplicate detection: finds visually duplicated images in one
+  click, keeps the sharpest
+· Batch export: export multiple records to CSV / Markdown
+  (prompts-only option)
+· Multiple libraries: switch or create library folders
+  independently
+· Light / Dark theme: instant switch
+· 4 languages: 中文 / English / Español / 日本語, switch
+  anytime
 
 ──────────────────────────────────────────────
 1. System Requirements & Installation
@@ -69,38 +99,26 @@ an image, the app auto-fills: positive/negative prompts, sampler,
 steps, CFG, seed, model name and LoRA (the status bar shows
 "Embedded prompt auto-extracted ✓").
 
-【ComfyUI output gallery (My Works)】
-In Settings you can add one or more "ComfyUI Output Folders"
-(multiple folders supported, replacing the old
-auto-joined output path). Changes apply immediately after
-saving; the app scans these folders (including all subfolders)
-in the background and adds the generated images to the gallery
-as "virtual references" — no file copying, no extra disk usage:
+【My Works (auto-import gallery)】
+In Settings you can add one or more "Auto-Import Folders"
+(multiple folders supported, such as your ComfyUI output
+directory, including all subfolders). Changes apply immediately
+after saving; the app scans these folders in the background and
+adds the generated images to the gallery as "virtual
+references" — no file copying, no extra disk usage:
 · A "My Works" group appears in the group tree; with multiple
-  output folders, works are auto-grouped as
+  folders, works are auto-grouped as
   My Works / <folder name> / <subfolder>
 · Generation parameters are auto-extracted for every work
   (prompt / sampler / model / LoRA, etc.)
-· Disk cache: the first scan result is cached, so startup loads
-  in seconds; thumbnails have their own cache too
-· Faster scanning: multi-threaded parallel parsing — measured
-  4,877 images dropping from ~4.5 minutes to ~45 seconds,
-  about 6.5× faster
-· Cache directory mismatch is auto-detected and rescanned
-· No more frozen scans: stale scan threads are cleaned up and a
-  timeout fallback is in place
-· Render cap prevents lag: when there are too many virtual
-  works, only the first N are shown; large galleries render in
-  chunks so the window stays responsive and images appear batch
-  by batch
-· "Refresh" button on the gallery toolbar: when new images
-  appear in your output folders, click it to trigger a
-  background rescan manually (no real-time watching, to
-  save resources)
+· Real-time updates: new / deleted / moved images in your
+  folders sync to the gallery automatically — no manual
+  refresh; you can also click the "Refresh" button on the
+  gallery toolbar to check immediately
+· Adjustable display cap: limit how many "My Works" items are
+  shown (default 250, adjustable 50–10000, or unlimited)
 · "File Missing" badge: works whose source file has been moved
   or deleted are clearly marked in the gallery
-· After saving settings the gallery refreshes immediately, with
-  a "Scanning output folders in the background..." notice
 · Double-click a virtual work to view details; it is never
   copied into the Library (avoids doubling disk usage)
 
@@ -144,11 +162,9 @@ With multiple images selected you can:
   parameters, source link, etc.
 
 【Duplicate detection】
-· One click finds visually duplicated images (perceptual hash);
-  compare the previews and keep the sharpest one — the rest are
-  moved to trash
-· Fixed "deleted duplicates resurrect after restart":
-  deletions are written back to the index, so they stay gone.
+· One click finds visually duplicated images; compare the
+  previews and keep the sharpest one — the rest are moved to
+  trash
 
 【Multiple libraries】
 · Settings → Library location → Change, to point to a new
@@ -160,12 +176,6 @@ With multiple images selected you can:
 · Settings → Theme: switch between Dark / Light, applies
   immediately
 
-【A1111 output gallery one-click import】
-· Settings → A1111 outputs folder (optional). Once configured,
-  one-click import images generated by Automatic1111 (with
-  prompt parameters) into the Library; duplicates are skipped
-  automatically
-
 【Model health check】
 The Models page scans your ComfyUI model folders (including
 subfolders) and checks file health (corrupt / 0-byte / leftover
@@ -176,7 +186,7 @@ ignored automatically.)
 【Downloading models to ComfyUI】
 · Settings → ComfyUI root folder (a separate setting,
   used only for model downloads — it does not interfere
-  with the output folders)
+  with the Auto-Import Folders)
 · Click "Download Models" in the gallery / details panel to
   download a picture's models straight into ComfyUI's matching
   model folders
@@ -185,41 +195,6 @@ ignored automatically.)
 · If a download hits 403 / HTML error pages, add a Civitai API
   Key in Settings (generated at civitai.red user center) and
   retry
-
-──────────────────────────────────────────────
-★ What's New in v3.2.0
-──────────────────────────────────────────────
-This release focuses on polish, reliability and real-time sync
-(all fixes and improvements since v3.1.0):
-
-1. Enlarged hover preview: hovering a row in List view now shows
-   a 360px preview in the right detail sidebar (the old 170px
-   box on the left is gone); Grid view does not show it, and it
-   can be toggled in Settings.
-2. Video resolution: a fully local mp4 parser shows the correct
-   size for imported videos (no more "Unknown").
-3. Collect batch-save fix: after importing multiple links at
-   once, "Save All" keeps each image's own prompt/model instead
-   of merging them; items still importing or without an image
-   are skipped with a notice; trailing CJK punctuation is
-   stripped from URLs.
-4. Configurable "My Works" display cap: limit the number of
-   items shown (default 250, adjustable 50–10000) or disable
-   the limit in Settings.
-5. Real-time incremental updates: a 15-second background delta
-   scan auto-syncs new/deleted/moved images to the gallery and
-   groups — no manual refresh needed; only changed files are
-   processed, so there is zero cost when nothing changed.
-6. No flicker on refresh: refreshing with unchanged data keeps
-   the UI untouched (scroll position and selection preserved).
-7. Missing thumbnails auto-fill: failed thumbnail generations
-   are retried, placeholders are never cached, and real
-   thumbnails swap in as soon as they are ready.
-8. Settings redesign: output folders are listed one per row with
-   open/remove buttons, renamed to the generic "Auto-Import
-   Folders"; the "张" unit no longer sits inside the spinbox.
-9. Smoother mouse-wheel: Grid view scrolls per-pixel instead of
-   jumping one page per tick.
 
 ──────────────────────────────────────────────
 3. Data Management
@@ -257,38 +232,52 @@ to the exe (created on first run; an old Chinese-named
   in place, save the image first, then drag in the local file
 · Changing computers: copy the whole Library folder over and
   open the app — everything is there
-· "My Works" is not showing: make sure the "ComfyUI Output
+· "My Works" is not showing: make sure the "Auto-Import
   Folders" in Settings are correct; the first scan runs in the
   background, so wait a moment — or click the "Refresh" button
-  on the gallery toolbar to trigger a manual rescan
+  on the gallery toolbar to check immediately
 · "My Works" marked "File Missing": the source file was moved
   or deleted — the gallery only references the original path,
-  so check your output folder
-· Is scanning slow? Multi-threaded parsing is much
-  faster (measured ~45 s for 4,877 images). For very large
-  folders the first scan may take a bit; the UI stays responsive
+  so check your Auto-Import Folders
+· Does the first scan of a large folder take long? The scan
+  runs in the background and the UI stays responsive; after the
+  first scan, new images are synced automatically with no
+  manual refresh needed
 · Model download shows 403 / HTML error page: add a Civitai API
   Key in Settings (civitai.red user center → API Keys) and retry
 
 ──────────────────────────────────────────────
 5. Version History
 ──────────────────────────────────────────────
-v3.2.0  (this release — all fixes & improvements since v3.1.0)
+v3.2.1  (this release)
+        · New look: frameless rounded window with a custom
+          title bar (drag to move, double-click to maximize /
+          restore, resize from any edge)
+        · Brand-new AI-art app icon
+        · Improved text contrast in dark theme — clearer and
+          easier to read
+        · Fixed leftover Chinese text in the English UI
+        · Fixed flicker while resizing the window, plus other
+          polish
+v3.2.0  (previous release — all fixes & improvements since
+        v3.1.0)
         · Enlarged hover preview (360px in the detail sidebar,
           toggleable; off in Grid view)
-        · Video resolution (local mp4 parser — no more "Unknown")
+        · Video resolution (imported videos show their real
+          size — no more "Unknown")
         · Collect batch-save fix (each image keeps its own
           prompt/model; skips importing/no-image items with a
-          notice; CJK punctuation stripped from URLs)
+          notice)
         · Configurable "My Works" display cap (default 250,
           50–10000, or unlimited)
-        · Real-time incremental updates (15s background delta
-          scan; zero cost when nothing changed)
+        · Real-time updates (new/deleted/moved images in your
+          Auto-Import Folders sync automatically — no manual
+          refresh)
         · No flicker on refresh (scroll & selection preserved)
-        · Missing thumbnails auto-fill (retried, no cached
-          placeholders, instant swap-in)
-        · Settings redesign (one output folder per row with
-          open/remove buttons; renamed "Auto-Import Folders")
+        · Missing thumbnails auto-fill (real thumbnails swap in
+          as soon as they are ready)
+        · Settings redesign (one Auto-Import Folder per row
+          with open/remove buttons)
         · Smoother mouse-wheel (per-pixel grid scrolling)
 v3.1.0  (previous release — every improvement since v3.0)
         · Civitai video link import (download video + extract

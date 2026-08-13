@@ -16,13 +16,60 @@ QMainWindow, QDialog, QMessageBox, QMenu, QToolTip {
     color: #f2f2f8;
 }
 
+/* ---------- v4.1 无边框窗口外壳 + 自绘标题栏 ---------- */
+#windowShell {
+    background-color: #16161f;
+    border: 1px solid #26263a;
+    border-radius: 14px;
+}
+#windowShell[windowMaximized="true"] {
+    border-radius: 0px;
+    border: none;
+}
+/* v4.3.1：缩放期间（WM_ENTERSIZEMOVE → windowResizing=true）去掉圆角/border，
+   从源头消除 resize 时圆角抗锯齿频繁重算的闪烁；WM_EXITSIZEMOVE 恢复圆角 */
+#windowShell[windowResizing="true"] {
+    border-radius: 0px;
+    border: none;
+}
+/* 标题栏：顶部两角随外壳圆角（外壳 14px 圆角 - 1px 边框 = 13px） */
+#titleBar {
+    background-color: #16161f;
+    border-top-left-radius: 13px;
+    border-top-right-radius: 13px;
+}
+#windowShell[windowMaximized="true"] #titleBar { border-radius: 0px; }
+#windowShell[windowResizing="true"] #titleBar { border-radius: 0px; }
+/* 标题栏左上角 AI logo：v4.3 暗/亮主题都固定深色底 #2a2a3e（原亮色为
+   #ffffff，白 A 与浅底融合看不清），PNG 内 A 任意主题都有深色衬底 */
+QLabel#appLogo {
+    border: 1px solid #3a3a58;
+    border-radius: 7px;
+    background-color: #2a2a3e;
+}
+/* 侧栏底部左角随外壳圆角（仅无边框外壳内生效，macOS 原生边框不受影响） */
+#windowShell #sidebar { border-bottom-left-radius: 13px; }
+#windowShell[windowMaximized="true"] #sidebar { border-bottom-left-radius: 0px; }
+#windowShell[windowResizing="true"] #sidebar { border-bottom-left-radius: 0px; }
+/* 窗口控制按钮：几何字符，暗色风；关闭按钮 hover 变红 */
+QToolButton#tbMin, QToolButton#tbMax, QToolButton#tbClose {
+    background: transparent; border: none; color: #c6c6dc;
+    font-size: 15px; border-radius: 8px;
+}
+QToolButton#tbMin:hover, QToolButton#tbMax:hover { background: #26263a; color: #ffffff; }
+QToolButton#tbClose:hover { background: #e05262; color: #ffffff; }
+QToolButton#tbMin:pressed, QToolButton#tbMax:pressed, QToolButton#tbClose:pressed {
+    background: #181824;
+}
+
 /* ---------- 侧边栏 ---------- */
 #sidebar {
     background-color: #12121a;
     border-right: 1px solid #1f1f2c;
 }
 #brandName { color: #ffffff; font-size: 17px; font-weight: 700; }
-#brandSub  { color: #9a9ab5; font-size: 11px; }
+/* v4.2：副文本提亮（#9a9ab5 → #b0b0c8），暗色侧栏/标题栏上对比度 ≈ 9.9:1 */
+#brandSub  { color: #b0b0c8; font-size: 11px; }
 #logoDot {
     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
         stop:0 #8b7bff, stop:0.5 #6d9bff, stop:1 #5ee0c8);
@@ -89,6 +136,21 @@ QComboBox QAbstractItemView {
 }
 QSpinBox::up-button, QSpinBox::down-button { width: 18px; border: none; background: transparent; }
 
+/* ---------- 复选框（v4.2：显式文字色 + 可见指示框，暗色下对比度达标） ---------- */
+QCheckBox {
+    color: #e6e6f2; background: transparent; spacing: 8px;
+}
+QCheckBox:disabled { color: #66667c; }
+QCheckBox::indicator {
+    width: 16px; height: 16px;
+    border: 1px solid #3a3a58; border-radius: 4px;
+    background: #21212e;
+}
+QCheckBox::indicator:hover { border-color: #6d5ef0; }
+QCheckBox::indicator:checked { background: #6d5ef0; border-color: #6d5ef0; }
+QCheckBox::indicator:checked:hover { background: #7c6cff; border-color: #7c6cff; }
+QCheckBox::indicator:disabled { border-color: #2c2c42; background: #1a1a26; }
+
 /* ---------- 按钮（苹果风圆角 + 完整悬停/按下反馈） ---------- */
 QPushButton {
     background-color: #26263a; color: #f2f2f8;
@@ -116,9 +178,12 @@ QPushButton#danger:hover { background: #331820; border-color: #e05262; color: #f
 QPushButton#danger:pressed { background: #221016; }
 
 /* ---------- 标签 ---------- */
-QLabel#fieldLabel { color: #a8a8c0; font-size: 12px; }
+/* v4.2：表单标签/计数提亮 #a8a8c0 → #c6c6dc（含设置框「我的作品最多显示」「张」单位） */
+QLabel#fieldLabel { color: #c6c6dc; font-size: 12px; }
+/* v4.3：工具栏标签（ModelPanel「类型」等）统一到 fieldLabel 对比度（暗 ≥ #c6c6dc） */
+QLabel#toolLabel { color: #c6c6dc; font-size: 12px; }
 QLabel#hint { color: #8a8aa5; font-size: 12px; }
-QLabel#countLabel { color: #a8a8c0; font-size: 12px; }
+QLabel#countLabel { color: #c6c6dc; font-size: 12px; }
 
 /* ---------- 列表 ---------- */
 QListWidget {
@@ -295,13 +360,56 @@ QMainWindow, QDialog, QMessageBox, QMenu, QToolTip {
     color: #1c1c28;
 }
 
+/* ---------- v4.1 无边框窗口外壳 + 自绘标题栏 ---------- */
+#windowShell {
+    background-color: #f4f4fa;
+    border: 1px solid #dcdcea;
+    border-radius: 14px;
+}
+#windowShell[windowMaximized="true"] {
+    border-radius: 0px;
+    border: none;
+}
+/* v4.3.1：缩放期间去掉圆角/border 消除闪烁；详见暗主题注释 */
+#windowShell[windowResizing="true"] {
+    border-radius: 0px;
+    border: none;
+}
+#titleBar {
+    background-color: #f4f4fa;
+    border-top-left-radius: 13px;
+    border-top-right-radius: 13px;
+}
+#windowShell[windowMaximized="true"] #titleBar { border-radius: 0px; }
+#windowShell[windowResizing="true"] #titleBar { border-radius: 0px; }
+/* 标题栏左上角 AI logo：v4.3 亮色也固定深色底 #2a2a3e（与暗色一致），
+   保证 PNG 内 A 在亮色标题栏上依然清晰；浅描边 #c8c8e0 勾勒容器 */
+QLabel#appLogo {
+    border: 1px solid #c8c8e0;
+    border-radius: 7px;
+    background-color: #2a2a3e;
+}
+#windowShell #sidebar { border-bottom-left-radius: 13px; }
+#windowShell[windowMaximized="true"] #sidebar { border-bottom-left-radius: 0px; }
+#windowShell[windowResizing="true"] #sidebar { border-bottom-left-radius: 0px; }
+QToolButton#tbMin, QToolButton#tbMax, QToolButton#tbClose {
+    background: transparent; border: none; color: #2a2a3d;
+    font-size: 15px; border-radius: 8px;
+}
+QToolButton#tbMin:hover, QToolButton#tbMax:hover { background: #e4e4f2; color: #17171f; }
+QToolButton#tbClose:hover { background: #e05262; color: #ffffff; }
+QToolButton#tbMin:pressed, QToolButton#tbMax:pressed, QToolButton#tbClose:pressed {
+    background: #d8d8e8;
+}
+
 /* ---------- 侧边栏 ---------- */
 #sidebar {
     background-color: #ececf5;
     border-right: 1px solid #dcdcea;
 }
 #brandName { color: #17171f; font-size: 17px; font-weight: 700; }
-#brandSub  { color: #6a6a82; font-size: 11px; }
+/* v4.2：副文本加深（#6a6a82 → #55556e），亮色侧栏上对比度 ≈ 6.6:1（原 4.47 不达标） */
+#brandSub  { color: #55556e; font-size: 11px; }
 #logoDot {
     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
         stop:0 #7b6bff, stop:0.5 #5d8bff, stop:1 #4ed8c0);
@@ -326,7 +434,8 @@ QPushButton#sideSmall:hover { background: #e2e2f0; color: #17171f; border-color:
 QPushButton#sideSmall:pressed { background: #d8d8e8; }
 
 /* ---------- 分组区 / 模型管理 ---------- */
-#groupTitle { color: #6a6a82; font-size: 12px; font-weight: 600; }
+/* v4.2：分组标题加深（#6a6a82 → #55556e），亮色侧栏对比度达标 */
+#groupTitle { color: #55556e; font-size: 12px; font-weight: 600; }
 QTreeView { show-decoration-selected: false; outline: 0; }
 QTreeWidget#groupTree {
     background: transparent; border: none; color: #3a3a4c;
@@ -369,6 +478,19 @@ QComboBox QAbstractItemView {
 }
 QSpinBox::up-button, QSpinBox::down-button { width: 18px; border: none; background: transparent; }
 
+/* ---------- 复选框（v4.2 亮色） ---------- */
+QCheckBox {
+    color: #1c1c28; background: transparent; spacing: 8px;
+}
+QCheckBox:disabled { color: #b8b8cc; }
+QCheckBox::indicator {
+    width: 16px; height: 16px;
+    border: 1px solid #c8c8e0; border-radius: 4px;
+    background: #ffffff;
+}
+QCheckBox::indicator:hover { border-color: #6d5ef0; }
+QCheckBox::indicator:checked { background: #6d5ef0; border-color: #6d5ef0; }
+
 /* ---------- 按钮 ---------- */
 QPushButton {
     background-color: #ffffff; color: #1c1c28;
@@ -397,7 +519,10 @@ QPushButton#danger:pressed { background: #f8e0e4; }
 
 /* ---------- 标签 ---------- */
 QLabel#fieldLabel { color: #6a6a82; font-size: 12px; }
-QLabel#hint { color: #88889c; font-size: 12px; }
+/* v4.3：工具栏标签（ModelPanel「类型」等）亮色加深到 #55556e（≥6.5:1） */
+QLabel#toolLabel { color: #55556e; font-size: 12px; }
+/* v4.2：亮色 hint 加深（#88889c → #6a6a82），#f4f4fa 上对比度由 2.84 提至 5.58 */
+QLabel#hint { color: #6a6a82; font-size: 12px; }
 QLabel#countLabel { color: #6a6a82; font-size: 12px; }
 
 /* ---------- 列表 ---------- */
@@ -462,7 +587,8 @@ QSlider::handle:horizontal:pressed { background: #5547d0; }
     background-color: #ffffff; border: 1px solid #c8c8e0; border-radius: 14px;
 }
 #popupTitle { color: #17171f; font-size: 14px; font-weight: 700; }
-#popupSection { color: #7a7a92; font-size: 11px; font-weight: 600; }
+/* v4.2：亮色小节加深（#7a7a92 → #55556e），白底对比度由 3.76 提至 6.6 */
+#popupSection { color: #55556e; font-size: 11px; font-weight: 600; }
 #popupText { color: #3a3a4c; font-size: 12px; }
 #chip {
     background-color: #f0f0f8; color: #4a4a62; border: 1px solid #d5d5e8;
@@ -542,7 +668,8 @@ QToolTip {
 }
 #pageTitle { color: #17171f; font-size: 19px; font-weight: 700; }
 #pageSub { color: #6a6a82; font-size: 12px; }
-#emptyHint { color: #9a9ab0; font-size: 14px; }
+/* v4.2：亮色空态提示加深（#9a9ab0 → #6a6a82），对比度由 2.49 提至 5.58 */
+#emptyHint { color: #6a6a82; font-size: 14px; }
 QToolButton#collapseBtn {
     background: transparent; border: none; color: #6a6a82;
     font-size: 12px; border-radius: 7px; padding: 3px 6px;

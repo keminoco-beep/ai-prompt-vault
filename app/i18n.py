@@ -347,7 +347,7 @@ _LANG_TABLES = {
         "模型「{name}」下载失败：{err}\n\nCivitai 官方下载需要登录凭证。你可以：\n① 在「设置」填入 Civitai API Key 后重试\n② 直接打开 Civitai 模型页手动下载":
             "Model \"{name}\" failed to download: {err}\n\nCivitai downloads need a login. You can:\n① Add your Civitai API Key in Settings and retry\n② Open the Civitai model page to download manually",
         "把网页上的例图直接拖到这里\n\n或按 Ctrl+V 粘贴剪贴板里的图片\n\n也支持拖入 / 粘贴 Civitai 链接，自动提取提示词与全部模型":
-            "Drag example images here\n\nor press Ctrl+V to paste from the clipboard\n\nYou can also paste Civitai links to auto-extract the prompt and all models",
+            "Drop images here\n\nor press Ctrl+V to paste images from clipboard\n\nCivitai links are also supported — auto-extract prompts and models",
         # ---- v3.0 视频支持 ----
         "不是受支持的视频文件": "Unsupported video file",
         "视频": "Video",
@@ -454,6 +454,17 @@ _LANG_TABLES = {
         "限制我的作品显示数量": "Limit number of My Works shown",
         "我的作品最多显示": "Show at most",
         "张": " items",
+
+        # ---- v4.1 自绘标题栏 ----
+        "最小化": "Minimize",
+        "最大化": "Maximize",
+        "还原": "Restore",
+
+        # ---- v4.2 i18n 审计补全（缺失 key / 专有名词） ----
+        "重新扫描输出文件夹，立即显示新增图片（手动刷新）":
+            "Rescan output folders now to show newly added images (manual refresh)",
+        "Civitai API Key": "Civitai API Key",
+        "AI-Prompt-Vault": "AI-Prompt-Vault",
     },
 
     "es": {
@@ -887,6 +898,17 @@ _LANG_TABLES = {
         "限制我的作品显示数量": "Limitar el número de Mis Obras mostradas",
         "我的作品最多显示": "Mostrar como máximo",
         "张": " uds.",
+
+        # ---- v4.1 自绘标题栏 ----
+        "最小化": "Minimizar",
+        "最大化": "Maximizar",
+        "还原": "Restaurar",
+
+        # ---- v4.2 i18n 审计补全（缺失 key / 专有名词） ----
+        "重新扫描输出文件夹，立即显示新增图片（手动刷新）":
+            "Vuelve a escanear las carpetas de salida para mostrar las imágenes nuevas (refresco manual)",
+        "Civitai API Key": "Clave de API de Civitai",
+        "AI-Prompt-Vault": "AI-Prompt-Vault",
     },
 
     "ja": {
@@ -1320,6 +1342,17 @@ _LANG_TABLES = {
         "限制我的作品显示数量": "マイ作品の表示数を制限",
         "我的作品最多显示": "マイ作品の最大表示",
         "张": " 枚",
+
+        # ---- v4.1 自绘标题栏 ----
+        "最小化": "最小化する",
+        "最大化": "最大化する",
+        "还原": "元に戻す",
+
+        # ---- v4.2 i18n 审计补全（缺失 key / 专有名词） ----
+        "重新扫描输出文件夹，立即显示新增图片（手动刷新）":
+            "出力フォルダを再スキャンして、新しく追加された画像をすぐに表示（手動更新）",
+        "Civitai API Key": "Civitai API キー",
+        "AI-Prompt-Vault": "AI-Prompt-Vault",
     },
 }
 

@@ -1,5 +1,5 @@
 ══════════════════════════════════════════════════════════
-      AI Prompt Vault  v3.2.0
+      AI Prompt Vault  v3.2.1
       Organiza tus obras de arte con IA (imágenes de referencia + prompts + modelos)
       Interfaz disponible en 中文 / English / Español / 日本語
 ══════════════════════════════════════════════════════════
@@ -10,9 +10,42 @@ con interfaz propia, para reunir y organizar obras de arte
 generadas por IA: guarda imágenes de referencia, extrae prompts
 automáticamente, anota todos los modelos, filtra por familia de
 modelo base, gestiona grupos personalizados y permite ver las
-salidas de ComfyUI directamente en la galería. Desde v3.1.0 la
-interfaz está disponible en cuatro idiomas — chino, inglés,
-español y japonés — y se puede cambiar en cualquier momento.
+salidas de ComfyUI directamente en la galería. La interfaz está
+disponible en cuatro idiomas — chino, inglés, español y japonés —
+y se puede cambiar en cualquier momento.
+
+──────────────────────────────────────────────
+★ Funciones principales / Features
+──────────────────────────────────────────────
+· Colección: arrastre imágenes de la web y suéltelas, péguelas
+  con Ctrl+V, o pegue un enlace de imagen / modelo / vídeo de
+  Civitai para importarlo con un clic — prompts, listas de
+  modelos y parámetros de muestreo se extraen automáticamente,
+  y los originales se descargan
+· Galería: vistas de cuadrícula / lista con ordenación,
+  múltiples filtros y búsqueda por palabra clave; vista previa
+  grande al pasar el ratón en modo Lista; los vídeos importados
+  muestran su resolución real
+· Mis Obras: señale las "Carpetas de importación automática"
+  (p. ej. su salida de ComfyUI) y las imágenes nuevas aparecen
+  en la galería automáticamente — sin actualización manual;
+  agrupación automática por carpeta; límite de visualización
+  ajustable en Ajustes
+· Modelos: comprobación de salud de las carpetas de modelos con
+  un clic (archivos corruptos / de 0 bytes / restos marcados),
+  y descarga con un clic de los modelos de una imagen
+  directamente a las carpetas de ComfyUI
+· Grupos: grupos personalizados más el árbol de grupos
+  automático de "Mis Obras" — organice por tema con facilidad
+· Detección de duplicados: encuentra imágenes visualmente
+  duplicadas con un clic y conserva la más nítida
+· Exportación por lotes: exporte varios registros a CSV /
+  Markdown (opción solo prompts)
+· Múltiples bibliotecas: cambie o cree carpetas de biblioteca
+  de forma independiente
+· Tema claro / oscuro: cambio instantáneo
+· 4 idiomas: 中文 / English / Español / 日本語, cambie cuando
+  quiera
 
 ──────────────────────────────────────────────
 1. Requisitos del sistema e instalación
@@ -73,42 +106,29 @@ prompt positivo/negativo, muestreador, pasos, CFG, semilla,
 nombre del modelo y LoRA (la barra de estado muestra "Prompt
 incrustado extraído automáticamente ✓").
 
-【Galería de salidas de ComfyUI (Mis Obras)】
-En Ajustes puede añadir una o varias "Carpetas de salida de
-ComfyUI" (múltiples carpetas, en lugar de la antigua
-ruta de salida unida automáticamente). Los cambios se aplican
-inmediatamente al guardar; la aplicación escanea estas carpetas
-(incluidos todos los subdirectorios) en segundo plano y añade
-las imágenes generadas a la galería como "referencias
-virtuales": no copia archivos ni ocupa espacio extra:
+【Mis Obras (galería de importación automática)】
+En Ajustes puede añadir una o varias "Carpetas de importación
+automática" (múltiples carpetas, como su directorio de salida de
+ComfyUI, incluidos todos los subdirectorios). Los cambios se
+aplican inmediatamente al guardar; la aplicación escanea estas
+carpetas en segundo plano y añade las imágenes generadas a la
+galería como "referencias virtuales": no copia archivos ni ocupa
+espacio extra:
 · Aparece el grupo "Mis Obras" en el árbol de grupos; con varias
-  carpetas de salida, las obras se agrupan automáticamente como
+  carpetas, las obras se agrupan automáticamente como
   Mis Obras / <nombre de carpeta> / <subcarpeta>
 · Los parámetros de generación se extraen automáticamente de
   cada obra (prompt / muestreador / modelo / LoRA, etc.)
-· Caché en disco: el primer escaneo se guarda en caché, así el
-  inicio carga en segundos; las miniaturas tienen su propia
-  caché
-· Escaneo más rápido: análisis paralelo multihilo — medido en
-  4.877 imágenes, de ~4,5 minutos a ~45 segundos, unas 6,5 veces
-  más rápido
-· La caché con directorio desajustado se invalida y se vuelve a
-  escanear automáticamente
-· Sin escaneos congelados: los hilos de escaneo antiguos se
-  limpian y hay un respaldo por tiempo de espera
-· Límite de renderizado para evitar bloqueos: cuando hay muchas
-  obras virtuales solo se muestran las primeras N; las galerías
-  grandes se renderizan por lotes, la ventana sigue respondiendo
-  y las imágenes aparecen poco a poco
-· Botón "Actualizar" en la barra de herramientas de la galería:
-  cuando aparezcan imágenes nuevas en las carpetas de salida,
-  haga clic para lanzar   un nuevo escaneo en segundo plano (sin vigilancia
-  en tiempo real, para ahorrar recursos)
+· Actualizaciones en tiempo real: las imágenes nuevas / eliminadas /
+  movidas en sus carpetas se sincronizan con la galería
+  automáticamente, sin actualización manual; también puede hacer
+  clic en "Actualizar" en la barra de herramientas de la galería
+  para comprobar al momento
+· Límite de visualización ajustable: limite cuántas obras de
+  "Mis Obras" se muestran (predeterminado 250, ajustable
+  50–10000, o ilimitado)
 · Marca "Archivo faltante": las obras cuyo archivo de origen se
   haya movido o eliminado se marcan claramente en la galería
-· Al guardar los ajustes, la galería se actualiza de inmediato,
-  con el aviso "Escaneando las carpetas de salida en segundo
-  plano..."
 · Haga doble clic en una obra virtual para ver los detalles;
   nunca se copia en la biblioteca (evita duplicar el uso del
   disco)
@@ -160,12 +180,9 @@ Con varias imágenes seleccionadas puede:
   modelos, parámetros, enlace de origen, etc.
 
 【Detección de duplicados】
-· Con un clic encuentra imágenes visualmente duplicadas (hash
-  perceptual); compare las vistas previas y conserve la más
-  nítida — el resto se mueve a la papelera
-· Corregido: "duplicados eliminados que reaparecen tras
-  reiniciar": la eliminación se escribe en el índice, así que
-  desaparecen para siempre.
+· Con un clic encuentra imágenes visualmente duplicadas;
+  compare las vistas previas y conserve la más nítida — el
+  resto se mueve a la papelera
 
 【Múltiples bibliotecas】
 · Ajustes → Ubicación de la biblioteca → Cambiar, para apuntar
@@ -178,12 +195,6 @@ Con varias imágenes seleccionadas puede:
 · Ajustes → Tema: cambie entre Oscuro / Claro, se aplica
   inmediatamente
 
-【Importación con un clic de la galería de A1111】
-· Ajustes → Carpeta de outputs de A1111 (opcional). Una vez
-  configurada, importe con un clic las imágenes generadas por
-  Automatic1111 (con parámetros de prompt) a la biblioteca; los
-  duplicados se omiten automáticamente
-
 【Comprobación de salud de los modelos】
 La página Modelos escanea las carpetas de modelos de ComfyUI
 (incluidos los subdirectorios) y comprueba la salud de los
@@ -195,7 +206,7 @@ se ignoran automáticamente.)
 【Descarga de modelos a ComfyUI】
 · Ajustes → Carpeta raíz de ComfyUI (un ajuste independiente,
   usado solo para descargar modelos — no interfiere
-  con las carpetas de salida)
+  con las Carpetas de importación automática)
 · Haga clic en "Descargar modelos" en la galería / panel de
   detalles para descargar los modelos de una imagen directamente
   a las carpetas de modelos correspondientes de ComfyUI
@@ -204,46 +215,6 @@ se ignoran automáticamente.)
 · Si una descarga falla con 403 / páginas de error HTML, añada
   una API Key de Civitai en Ajustes (generada en el centro de
   usuario de civitai.red) y reintente
-
-──────────────────────────────────────────────
-★ Novedades de v3.2.0
-──────────────────────────────────────────────
-Esta versión se centra en pulido, fiabilidad y sincronización
-en tiempo real (todas las correcciones y mejoras desde v3.1.0):
-
-1. Vista previa ampliada al pasar el ratón: al pasar el ratón
-   por una fila en modo Lista, el panel lateral derecho muestra
-   una vista previa de 360px (la antigua caja de 170px de la
-   izquierda se ha eliminado); en modo Cuadrícula no se muestra
-   y se puede activar/desactivar en Ajustes.
-2. Resolución de vídeo: un analizador mp4 totalmente local
-   muestra el tamaño correcto de los vídeos importados (ya no
-   aparece "Desconocido").
-3. Corrección del guardado por lotes de Colección: después de
-   importar varios enlaces a la vez, "Guardar todo" conserva el
-   prompt/modelo propio de cada imagen (ya no se mezclan); los
-   elementos que aún se importan o no tienen imagen se omiten
-   con un aviso; se elimina la puntuación CJK final de las URL.
-4. Límite de visualización configurable de "Mis Obras": limite
-   el número de elementos mostrados (predeterminado 250,
-   ajustable 50–10000) o desactive el límite en Ajustes.
-5. Actualizaciones incrementales en tiempo real: un escaneo
-   delta en segundo plano cada 15 segundos sincroniza
-   automáticamente las imágenes nuevas/eliminadas/movidas con
-   la galería y los grupos, sin actualización manual; solo se
-   procesan los archivos cambiados — coste cero si no hay cambios.
-6. Sin parpadeo al actualizar: actualizar con datos sin cambios
-   mantiene la interfaz intacta (se conservan la posición de
-   desplazamiento y la selección).
-7. Relleno automático de miniaturas: las miniaturas fallidas se
-   reintentan, los marcadores de posición no se cachean y las
-   miniaturas reales se intercambian en cuanto están listas.
-8. Rediseño de Ajustes: las carpetas de salida se muestran una
-   por fila con botones de abrir/eliminar, renombradas al nombre
-   genérico "Carpetas de importación automática"; la unidad "张"
-   ya no está dentro del cuadro numérico.
-9. Rueda del ratón más suave: el modo Cuadrícula se desplaza
-   píxel a píxel en lugar de saltar una página por tick.
 
 ──────────────────────────────────────────────
 3. Gestión de datos
@@ -286,17 +257,17 @@ antigua con nombre chino "资料库" se migra automáticamente):
 · Cambiar de ordenador: copie toda la carpeta Library y abra la
   aplicación — todo está ahí
 · "Mis Obras" no aparece: asegúrese de que las "Carpetas de
-  salida de ComfyUI" en Ajustes son correctas; el primer
+  importación automática" en Ajustes son correctas; el primer
   escaneo se hace en segundo plano, espere un momento — o haga
   clic en "Actualizar" en la barra de herramientas de la galería
-  para forzar un escaneo
+  para comprobar al momento
 · "Mis Obras" marcadas como "Archivo faltante": el archivo de
   origen se movió o eliminó — la galería solo referencia la ruta
-  original, revise la carpeta de salida
-· ¿El escaneo tarda mucho? El análisis multihilo
-  es mucho más rápido (medido ~45 s para 4.877 imágenes). Para
-  carpetas muy grandes, el primer escaneo puede tardar algo; la
-  interfaz sigue respondiendo
+  original, revise las Carpetas de importación automática
+· ¿El primer escaneo de una carpeta grande tarda mucho? El
+  escaneo se hace en segundo plano y la interfaz sigue
+  respondiendo; tras el primer escaneo, las imágenes nuevas se
+  sincronizan automáticamente, sin actualización manual
 · La descarga de modelos muestra 403 / página de error HTML:
   añada una API Key de Civitai en Ajustes (centro de usuario de
   civitai.red → API Keys) y reintente
@@ -304,27 +275,39 @@ antigua con nombre chino "资料库" se migra automáticamente):
 ──────────────────────────────────────────────
 5. Historial de versiones
 ──────────────────────────────────────────────
-v3.2.0  (esta versión — todas las correcciones y mejoras desde
-        v3.1.0)
+v3.2.1  (esta versión)
+        · Nueva apariencia: ventana sin bordes con esquinas
+          redondeadas y barra de título personalizada (arrastrar
+          para mover, doble clic para maximizar / restaurar,
+          redimensionar desde cualquier borde)
+        · Nuevo icono de arte con IA
+        · Contraste de texto mejorado en el tema oscuro — más
+          claro y legible
+        · Corregido texto en chino residual en la interfaz en
+          inglés
+        · Corregido parpadeo al redimensionar la ventana y
+          otros detalles
+v3.2.0  (versión anterior — todas las correcciones y mejoras
+        desde v3.1.0)
         · Vista previa ampliada al pasar el ratón (360px en el
           panel lateral, configurable; en cuadrícula no)
-        · Resolución de vídeo (analizador mp4 local — ya no
-          "Desconocido")
+        · Resolución de vídeo (los vídeos importados muestran su
+          tamaño real — ya no "Desconocido")
         · Corrección del guardado por lotes de Colección (cada
           imagen conserva su prompt/modelo; omisión y aviso para
-          elementos en importación/sin imagen; se elimina la
-          puntuación CJK de las URL)
+          elementos en importación/sin imagen)
         · Límite configurable de "Mis Obras" (predeterminado 250,
           50–10000, o ilimitado)
-        · Actualizaciones incrementales en tiempo real (escaneo
-          delta cada 15 s; coste cero sin cambios)
+        · Actualizaciones en tiempo real (las imágenes nuevas /
+          eliminadas / movidas en las Carpetas de importación
+          automática se sincronizan solas — sin actualización
+          manual)
         · Sin parpadeo al actualizar (se conservan desplazamiento
           y selección)
-        · Miniaturas con relleno automático (reintento, sin
-          marcadores cacheados, intercambio inmediato)
-        · Rediseño de Ajustes (una carpeta de salida por fila con
-          abrir/eliminar; renombradas "Carpetas de importación
-          automática")
+        · Miniaturas con relleno automático (las miniaturas
+          reales se intercambian en cuanto están listas)
+        · Rediseño de Ajustes (una Carpeta de importación
+          automática por fila con abrir/eliminar)
         · Rueda del ratón más suave (desplazamiento por píxeles
           en cuadrícula)
 v3.1.0  (versión anterior — todas las mejoras desde v3.0)
